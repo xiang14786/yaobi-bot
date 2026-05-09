@@ -4,8 +4,7 @@
 V2 重點功能:
 - 🔋 提早預警: 抓「尚未啟動」的妖幣
 - 📐 OB+FVG 結構分析
-- ⏳ BB 壓縮 / OI 建倉偵測
-- 🎯 多時框共振確認
+- 🎯 完整交易建議 (進場/止損/止盈/槓桿/單型)
 - 🤖 /status 查詢 Bot 運作狀態
 """
 
@@ -49,7 +48,7 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
     now = asyncio.get_event_loop().time()
     if not force and now - LAST_SCAN["time"] < CACHE_TTL and LAST_SCAN["data"]:
         return LAST_SCAN["data"]
-    data = await fetch_all_metrics_v2(top_n=40)
+    data = await fetch_all_metrics_v2(top_n=60)
     LAST_SCAN.update({"time": now, "data": data})
     return data
 
@@ -99,6 +98,159 @@ def fmt_list(coins, title, show_triggers=True):
 
 
 # ============================================================
+# 交易建議生成器
+# ============================================================
+def generate_trade_advice(m: CoinMetricsV2) -> str:
+    price = m.last_price
+
+    # === 方向判斷 ===
+    is_long = "PRE_PUMP" in m.early_bias or "🚀" in m.direction or "🔋" in m.direction
+    is_short = "PRE_DUMP" in m.early_bias or "📉" in m.direction or "⚠️" in m.direction
+    direction_str = "做多 🟢" if is_long else "做空 🔴" if is_short else "觀望 ⚪"
+
+    # === 信心等級 ===
+    conf = m.confidence
+    if conf >= 0.8:
+        conf_str = "非常高 ⭐⭐⭐"
+    elif conf >= 0.65:
+        conf_str = "高 ⭐⭐"
+    elif conf >= 0.5:
+        conf_str = "中等 ⭐"
+    else:
+        conf_str = "偏低 ⚠️"
+
+    # === 槓桿建議 ===
+    # 小幣波動大，槓桿自動降檔
+    is_major = m.base in {"BTC", "ETH", "BNB", "SOL", "XRP"}
+    if conf < 0.5:
+        lev_safe, lev_std, lev_max = 0, 0, 0
+        lev_note = "信心不足，不建議開倉"
+    elif conf < 0.65:
+        lev_safe, lev_std, lev_max = (3, 5, 8) if is_major else (2, 3, 5)
+        lev_note = "輕倉試探"
+    elif conf < 0.8:
+        lev_safe, lev_std, lev_max = (5, 10, 15) if is_major else (3, 5, 8)
+        lev_note = "標準倉位"
+    else:
+        lev_safe, lev_std, lev_max = (10, 15, 20) if is_major else (5, 8, 10)
+        lev_note = "可加重倉位"
+
+    # === 單型判斷 ===
+    has_squeeze = any("BB 壓縮" in t for t in m.triggers)
+    has_sleep = any("沉睡" in t for t in m.triggers)
+    has_oi = any("OI 暴增" in t for t in m.triggers)
+    has_mtf = any("時框" in t for t in m.triggers)
+
+    if has_squeeze or has_sleep:
+        trade_type = "短單 ⚡ (預期 1~4 小時)"
+    elif has_oi and has_mtf:
+        trade_type = "長單 📈 (預期 1~3 天)"
+    elif has_oi:
+        trade_type = "中單 🕐 (預期 4~24 小時)"
+    else:
+        trade_type = "短中單 (預期 2~12 小時)"
+
+    # === 進場/止損/止盈計算 ===
+    support = m.nearest_support
+    resistance = m.nearest_resistance
+
+    if is_long and support:
+        # 做多: 等回測 OB 進場
+        entry_low = support * 0.998
+        entry_high = support * 1.015
+        stop_loss = support * 0.975      # OB 下緣 -2.5%
+        tp1 = resistance if resistance else price * 1.08
+        tp2 = tp1 * 1.05
+        rr = (tp1 - entry_high) / (entry_high - stop_loss)
+
+        # 判斷現在是否已在 OB 區間
+        in_ob = entry_low <= price <= entry_high * 1.02
+        entry_note = "✅ 當前價格已在進場區！" if in_ob else f"⏳ 等待回測，距進場區 {(price - entry_high) / price * 100:.1f}%"
+
+        trade_section = (
+            f"*方向*: {direction_str}\n"
+            f"*單型*: {trade_type}\n"
+            f"*信心*: {conf_str}\n\n"
+            f"━━━ 進場區間 ━━━\n"
+            f"📍 理想進場: `${entry_low:,.4f}` ~ `${entry_high:,.4f}`\n"
+            f"📍 FVG 50%: `${(entry_low+entry_high)/2:,.4f}` ← 最佳點\n"
+            f"{entry_note}\n\n"
+            f"━━━ 風險管理 ━━━\n"
+            f"🛑 止損: `${stop_loss:,.4f}` (破此出場)\n"
+            f"🎯 止盈1: `${tp1:,.4f}` (+{(tp1-price)/price*100:.1f}%)\n"
+            f"🎯 止盈2: `${tp2:,.4f}` (+{(tp2-price)/price*100:.1f}%)\n"
+            f"📊 風報比: `1 : {rr:.1f}` {'✅' if rr >= 2 else '⚠️ 偏低'}\n\n"
+            f"━━━ 槓桿建議 ━━━\n"
+            f"🟢 保守: `{lev_safe}x`\n"
+            f"🟡 標準: `{lev_std}x`\n"
+            f"🔴 激進: `{lev_max}x`\n"
+            f"💡 {lev_note}\n"
+        )
+
+    elif is_short and resistance:
+        # 做空: 等反彈 OB 進場
+        entry_low = resistance * 0.985
+        entry_high = resistance * 1.002
+        stop_loss = resistance * 1.025   # OB 上緣 +2.5%
+        tp1 = support if support else price * 0.92
+        tp2 = tp1 * 0.95
+        rr = (entry_low - tp1) / (stop_loss - entry_low)
+
+        in_ob = entry_low <= price <= entry_high
+        entry_note = "✅ 當前價格已在進場區！" if in_ob else f"⏳ 等待反彈，距進場區 {(entry_low - price) / price * 100:.1f}%"
+
+        trade_section = (
+            f"*方向*: {direction_str}\n"
+            f"*單型*: {trade_type}\n"
+            f"*信心*: {conf_str}\n\n"
+            f"━━━ 進場區間 ━━━\n"
+            f"📍 理想進場: `${entry_low:,.4f}` ~ `${entry_high:,.4f}`\n"
+            f"📍 FVG 50%: `${(entry_low+entry_high)/2:,.4f}` ← 最佳點\n"
+            f"{entry_note}\n\n"
+            f"━━━ 風險管理 ━━━\n"
+            f"🛑 止損: `${stop_loss:,.4f}` (破此出場)\n"
+            f"🎯 止盈1: `${tp1:,.4f}` (-{(price-tp1)/price*100:.1f}%)\n"
+            f"🎯 止盈2: `${tp2:,.4f}` (-{(price-tp2)/price*100:.1f}%)\n"
+            f"📊 風報比: `1 : {rr:.1f}` {'✅' if rr >= 2 else '⚠️ 偏低'}\n\n"
+            f"━━━ 槓桿建議 ━━━\n"
+            f"🟢 保守: `{lev_safe}x`\n"
+            f"🟡 標準: `{lev_std}x`\n"
+            f"🔴 激進: `{lev_max}x`\n"
+            f"💡 {lev_note}\n"
+        )
+
+    else:
+        trade_section = (
+            f"*方向*: {direction_str}\n"
+            f"*信心*: {conf_str}\n\n"
+            f"⚠️ 目前結構不明確，建議觀望\n"
+            f"等待更清晰的 OB 支撐/阻力位形成後再進場\n"
+        )
+
+    # === 注意事項 ===
+    warnings = []
+    if abs(m.price_change_pct) > 10:
+        warnings.append(f"⚠️ 24h 已波動 {m.price_change_pct:+.1f}%，追高追低風險較大")
+    if abs(m.funding_rate) > 0.001:
+        warnings.append(f"⚠️ 資金費率極端 ({m.funding_rate*100:+.3f}%)，注意擠兌風險")
+    if conf < 0.5:
+        warnings.append("⚠️ 信心偏低，建議等更多訊號確認")
+    if lev_std == 0:
+        warnings.append("🚫 建議此時不開倉")
+
+    warning_str = "\n".join(warnings) if warnings else "✅ 無特殊警告"
+
+    return (
+        f"💡 *{m.base}/USDT 交易建議*\n\n"
+        f"當前價: `${price:,.4f}`\n\n"
+        f"{trade_section}\n"
+        f"━━━ 注意事項 ━━━\n"
+        f"{warning_str}\n\n"
+        f"_⚠️ 純技術分析參考，非投資建議，請自行控管風險_"
+    )
+
+
+# ============================================================
 # 指令
 # ============================================================
 async def cmd_start(update, ctx):
@@ -113,6 +265,7 @@ async def cmd_start(update, ctx):
         "/scan - 預設條件掃描\n\n"
         "*查詢*\n"
         "/detail BTC - 詳細指標\n"
+        "/trade BTC - 💡 完整交易建議\n"
         "/structure BTC - OB+FVG 結構\n"
         "/status - 🤖 Bot 運作狀態\n\n"
         "/help - 完整說明"
@@ -123,17 +276,18 @@ async def cmd_start(update, ctx):
 async def cmd_help(update, ctx):
     msg = (
         "*完整指令*\n\n"
-        "*🎯 提早預警 (V2 主打)*\n"
-        "`/pre_pump` 即將暴漲 (24h 漲跌 <8%)\n"
+        "*🎯 提早預警*\n"
+        "`/pre_pump` 即將暴漲\n"
         "`/pre_dump` 即將暴跌\n"
         "`/squeeze` BB 壓縮 + OI 建倉\n"
         "`/confidence` 多訊號共振\n\n"
-        "*📊 一般查詢*\n"
+        "*📊 查詢*\n"
         "`/scan` 個人篩選掃描\n"
         "`/top10` 綜合 Top 10\n"
-        "`/pump` 已暴漲清單\n"
-        "`/dump` 已暴跌清單\n"
-        "`/detail BTC` 單幣詳細\n"
+        "`/pump` 看多榜\n"
+        "`/dump` 看空榜\n"
+        "`/detail BTC` 單幣詳細指標\n"
+        "`/trade BTC` 💡 完整交易建議\n"
         "`/structure BTC` OB+FVG 結構\n"
         "`/status` Bot 運作狀態\n\n"
         "*🔧 個人化篩選*\n"
@@ -143,20 +297,10 @@ async def cmd_help(update, ctx):
         "`/myfilters` 查看設定\n"
         "`/reset` 重設\n\n"
         "*🔔 訂閱*\n"
-        "`/sub_pre` 預警自動推送 (30 分鐘)\n"
-        "`/sub` 一般榜單推送 (1 小時)\n"
-        "`/unsub_all` 全部取消\n\n"
-        "*🧠 偵測維度*\n"
-        "OI 暴增 + 價格平靜 → 大資金建倉\n"
-        "費率背離 → 軋多/軋空風險\n"
-        "BB 壓縮 → 波動率即將擴張\n"
-        "量能階梯 → 持續性買賣盤\n"
-        "多空比急轉 → 散戶情緒反指\n"
-        "CVD 背離 → 量價背離訊號\n"
-        "沉睡甦醒 → 長期低波突發異動\n"
-        "OB+FVG → 機構訂單區/缺口\n"
-        "多時框共振 → 15m/1h/4h 一致\n\n"
-        "⚠️ 不構成投資建議,風險自負"
+        "`/sub_pre` 預警推送 (30 分鐘)\n"
+        "`/sub` 榜單推送 (1 小時)\n"
+        "`/unsub_all` 取消全部\n\n"
+        "⚠️ 不構成投資建議，風險自負"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
@@ -222,6 +366,22 @@ async def cmd_dump(update, ctx):
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
+async def cmd_trade(update, ctx):
+    """完整交易建議指令"""
+    if not ctx.args:
+        await update.message.reply_text("用法: `/trade BTC`", parse_mode=ParseMode.MARKDOWN)
+        return
+    target = ctx.args[0].upper().replace("USDT", "")
+    await update.message.reply_text(f"💡 分析 {target} 中...")
+    coins = await get_scan()
+    m = next((c for c in coins if c.base == target), None)
+    if not m:
+        await update.message.reply_text(f"❌ 找不到 {target}，可能成交額太低未列入掃描")
+        return
+    advice = generate_trade_advice(m)
+    await update.message.reply_text(advice, parse_mode=ParseMode.MARKDOWN)
+
+
 async def cmd_detail(update, ctx):
     if not ctx.args:
         await update.message.reply_text("用法: `/detail BTC`", parse_mode=ParseMode.MARKDOWN)
@@ -254,9 +414,10 @@ async def cmd_detail(update, ctx):
     if m.nearest_support or m.nearest_resistance:
         msg += "*結構位*\n"
         if m.nearest_support:
-            msg += f"支撐: ${m.nearest_support:,.4f}\n"
+            msg += f"支撐 (Bullish OB): `${m.nearest_support:,.4f}`\n"
         if m.nearest_resistance:
-            msg += f"阻力: ${m.nearest_resistance:,.4f}\n"
+            msg += f"阻力 (Bearish OB): `${m.nearest_resistance:,.4f}`\n"
+    msg += f"\n💡 輸入 `/trade {m.base}` 查看完整交易建議"
     if m.tags:
         msg += "\n" + " ".join(m.tags)
 
@@ -274,30 +435,53 @@ async def cmd_structure(update, ctx):
         await update.message.reply_text(f"❌ 找不到 {target}")
         return
 
+    price = m.last_price
     msg = (
         f"📐 *{m.base}/USDT 結構分析*\n\n"
-        f"當前價: `${m.last_price:,.4f}`\n"
+        f"當前價: `${price:,.4f}`\n"
         f"結構分: `{m.score_structure:.0f}/100`\n"
         f"結構偏向: `{m.structure_bias}`\n\n"
     )
+
     if m.nearest_support:
-        dist = (m.last_price - m.nearest_support) / m.last_price * 100
-        msg += f"🟢 *最近支撐 (Bullish OB)*\n   ${m.nearest_support:,.4f} (距 {dist:.2f}%)\n\n"
+        ob_top = m.nearest_support
+        ob_bottom = m.nearest_support * 0.98
+        fvg_50 = (ob_top + ob_bottom) / 2
+        dist = (price - ob_top) / price * 100
+        in_zone = price <= ob_top * 1.02
+        msg += (
+            f"🟢 *Bullish OB (買入區)*\n"
+            f"   上緣: `${ob_top:,.4f}`\n"
+            f"   下緣: `${ob_bottom:,.4f}`\n"
+            f"   FVG 50%: `${fvg_50:,.4f}` ← 最佳進場點\n"
+            f"   {'✅ 當前在支撐區內！' if in_zone else f'距此區域: {dist:.2f}%'}\n\n"
+        )
+
     if m.nearest_resistance:
-        dist = (m.nearest_resistance - m.last_price) / m.last_price * 100
-        msg += f"🔴 *最近阻力 (Bearish OB)*\n   ${m.nearest_resistance:,.4f} (距 {dist:.2f}%)\n\n"
+        ob_top2 = m.nearest_resistance * 1.02
+        ob_bottom2 = m.nearest_resistance
+        fvg_50_2 = (ob_top2 + ob_bottom2) / 2
+        dist2 = (m.nearest_resistance - price) / price * 100
+        msg += (
+            f"🔴 *Bearish OB (阻力區)*\n"
+            f"   上緣: `${ob_top2:,.4f}`\n"
+            f"   下緣: `${ob_bottom2:,.4f}`\n"
+            f"   FVG 50%: `${fvg_50_2:,.4f}` ← 空單參考點\n"
+            f"   距此區域: `{dist2:.2f}%`\n\n"
+        )
 
-    structure_triggers = [t for t in m.triggers if "OB" in t or "FVG" in t or "結構" in t]
-    if structure_triggers:
-        msg += "*結構訊號*\n" + "\n".join(f"• {t}" for t in structure_triggers) + "\n\n"
+    if m.nearest_support and m.nearest_resistance:
+        potential = (m.nearest_resistance - price) / price * 100
+        risk = (price - m.nearest_support * 0.975) / price * 100
+        rr = potential / risk if risk > 0 else 0
+        msg += (
+            f"📊 *風報比參考*\n"
+            f"   潛在獲利空間: `+{potential:.1f}%`\n"
+            f"   風險空間: `-{risk:.1f}%`\n"
+            f"   風報比: `1 : {rr:.1f}` {'✅' if rr >= 2 else '⚠️ 偏低'}\n\n"
+        )
 
-    msg += (
-        "*ICT 操作建議*\n"
-        "• 價格回測 Bullish OB 不破 → 多單\n"
-        "• 價格反彈 Bearish OB 不過 → 空單\n"
-        "• FVG 50% 為理想進場區\n"
-        "• 突破結構後等回踩確認"
-    )
+    msg += f"💡 輸入 `/trade {m.base}` 查看完整交易建議"
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 
@@ -364,7 +548,7 @@ async def cmd_set_max_change(update, ctx):
     except:
         await update.message.reply_text("用法: `/set_max_change 12`", parse_mode=ParseMode.MARKDOWN); return
     USER_FILTERS.setdefault(update.effective_user.id, {})["max_price_change_pct"] = v
-    await update.message.reply_text(f"✅ 最大已動幅度 = {v}% (超過視為已晚)")
+    await update.message.reply_text(f"✅ 最大已動幅度 = {v}%")
 
 
 async def cmd_myfilters(update, ctx):
@@ -434,6 +618,8 @@ async def push_pre_warning(ctx):
         for i, c in enumerate(pre_dump, 1):
             parts.append(fmt_card(c, i, show_triggers=True))
             parts.append("")
+
+    parts.append("💡 輸入 `/trade 幣種` 查看完整交易建議")
     text = "\n".join(parts)
 
     for cid in list(PRE_PUMP_SUBSCRIBERS):
@@ -470,6 +656,7 @@ async def post_init(app):
         BotCommand("top10", "綜合 Top 10"),
         BotCommand("pump", "看多榜"),
         BotCommand("dump", "看空榜"),
+        BotCommand("trade", "💡 完整交易建議 /trade BTC"),
         BotCommand("detail", "詳細指標 /detail BTC"),
         BotCommand("structure", "OB+FVG /structure BTC"),
         BotCommand("status", "🤖 Bot 運作狀態"),
@@ -497,8 +684,8 @@ def main():
         ("squeeze", cmd_squeeze), ("confidence", cmd_confidence),
         ("scan", cmd_scan), ("top10", cmd_top10),
         ("pump", cmd_pump), ("dump", cmd_dump),
-        ("detail", cmd_detail), ("structure", cmd_structure),
-        ("status", cmd_status),
+        ("trade", cmd_trade), ("detail", cmd_detail),
+        ("structure", cmd_structure), ("status", cmd_status),
         ("set_score", cmd_set_score), ("set_early", cmd_set_early),
         ("set_max_change", cmd_set_max_change),
         ("myfilters", cmd_myfilters), ("reset", cmd_reset),
