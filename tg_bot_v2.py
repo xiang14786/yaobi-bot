@@ -6,18 +6,13 @@ V2 重點功能:
 - 📐 OB+FVG 結構分析
 - ⏳ BB 壓縮 / OI 建倉偵測
 - 🎯 多時框共振確認
-
-新增指令:
-  /pre_pump   - 預備暴漲榜 (尚未啟動)
-  /pre_dump   - 預備暴跌榜
-  /squeeze    - 壓縮蓄勢榜
-  /structure BTC - 查單幣 OB/FVG 結構
-  /confidence - 高信心度榜 (3+ 訊號共振)
+- 🤖 /status 查詢 Bot 運作狀態
 """
 
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 
 from telegram import Update, BotCommand
@@ -42,7 +37,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "請填入_你的_token")
 
 USER_FILTERS: dict = {}
 SUBSCRIBERS: set = set()
-PRE_PUMP_SUBSCRIBERS: set = set()   # 訂閱提早預警的人
+PRE_PUMP_SUBSCRIBERS: set = set()
 LAST_SCAN: dict = {"time": 0, "data": []}
 CACHE_TTL = 120
 
@@ -118,7 +113,8 @@ async def cmd_start(update, ctx):
         "/scan - 預設條件掃描\n\n"
         "*查詢*\n"
         "/detail BTC - 詳細指標\n"
-        "/structure BTC - OB+FVG 結構\n\n"
+        "/structure BTC - OB+FVG 結構\n"
+        "/status - 🤖 Bot 運作狀態\n\n"
         "/help - 完整說明"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
@@ -138,7 +134,8 @@ async def cmd_help(update, ctx):
         "`/pump` 已暴漲清單\n"
         "`/dump` 已暴跌清單\n"
         "`/detail BTC` 單幣詳細\n"
-        "`/structure BTC` OB+FVG 結構\n\n"
+        "`/structure BTC` OB+FVG 結構\n"
+        "`/status` Bot 運作狀態\n\n"
         "*🔧 個人化篩選*\n"
         "`/set_score 60` 最低總分\n"
         "`/set_early 50` 最低早分\n"
@@ -255,7 +252,7 @@ async def cmd_detail(update, ctx):
     if m.triggers:
         msg += "*觸發訊號*\n" + "\n".join(f"• {t}" for t in m.triggers) + "\n\n"
     if m.nearest_support or m.nearest_resistance:
-        msg += f"*結構位*\n"
+        msg += "*結構位*\n"
         if m.nearest_support:
             msg += f"支撐: ${m.nearest_support:,.4f}\n"
         if m.nearest_resistance:
@@ -300,6 +297,42 @@ async def cmd_structure(update, ctx):
         "• 價格反彈 Bearish OB 不過 → 空單\n"
         "• FVG 50% 為理想進場區\n"
         "• 突破結構後等回踩確認"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_status(update, ctx):
+    coins = LAST_SCAN.get("data", [])
+    scan_time = LAST_SCAN.get("time", 0)
+
+    if scan_time == 0:
+        last_scan_str = "尚未掃描"
+    else:
+        elapsed = int(time.time() - scan_time)
+        if elapsed < 60:
+            last_scan_str = f"{elapsed} 秒前"
+        elif elapsed < 3600:
+            last_scan_str = f"{elapsed // 60} 分鐘前"
+        else:
+            last_scan_str = f"{elapsed // 3600} 小時前"
+
+    pre_pump = find_pre_pump(coins)
+    pre_dump = find_pre_dump(coins)
+    squeeze = find_squeeze(coins)
+
+    msg = (
+        f"🤖 *Bot 運作狀態*\n\n"
+        f"✅ 運作中\n"
+        f"🕐 上次掃描: `{last_scan_str}`\n"
+        f"📊 掃描標的數: `{len(coins)}`\n\n"
+        f"*當前訊號*\n"
+        f"🔋 預備暴漲: `{len(pre_pump)}` 個\n"
+        f"⚠️ 預備暴跌: `{len(pre_dump)}` 個\n"
+        f"🎯 壓縮蓄勢: `{len(squeeze)}` 個\n\n"
+        f"*訂閱人數*\n"
+        f"預警訂閱: `{len(PRE_PUMP_SUBSCRIBERS)}` 人\n"
+        f"榜單訂閱: `{len(SUBSCRIBERS)}` 人\n\n"
+        f"_下次預警推送約 30 分鐘一次_"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
@@ -357,12 +390,12 @@ async def cmd_reset(update, ctx):
 # ============================================================
 async def cmd_sub_pre(update, ctx):
     PRE_PUMP_SUBSCRIBERS.add(update.effective_chat.id)
-    await update.message.reply_text("🔋 已訂閱預警!每 30 分鐘自動推送預備暴漲/暴跌榜")
+    await update.message.reply_text("🔋 已訂閱預警！每 30 分鐘自動推送預備暴漲/暴跌榜")
 
 
 async def cmd_sub(update, ctx):
     SUBSCRIBERS.add(update.effective_chat.id)
-    await update.message.reply_text("🔔 已訂閱!每小時推送 Top 5")
+    await update.message.reply_text("🔔 已訂閱！每小時推送 Top 5")
 
 
 async def cmd_unsub_all(update, ctx):
@@ -439,6 +472,7 @@ async def post_init(app):
         BotCommand("dump", "看空榜"),
         BotCommand("detail", "詳細指標 /detail BTC"),
         BotCommand("structure", "OB+FVG /structure BTC"),
+        BotCommand("status", "🤖 Bot 運作狀態"),
         BotCommand("set_score", "設總分門檻"),
         BotCommand("set_early", "設早分門檻"),
         BotCommand("set_max_change", "設最大已動 %"),
@@ -464,6 +498,7 @@ def main():
         ("scan", cmd_scan), ("top10", cmd_top10),
         ("pump", cmd_pump), ("dump", cmd_dump),
         ("detail", cmd_detail), ("structure", cmd_structure),
+        ("status", cmd_status),
         ("set_score", cmd_set_score), ("set_early", cmd_set_early),
         ("set_max_change", cmd_set_max_change),
         ("myfilters", cmd_myfilters), ("reset", cmd_reset),
@@ -473,7 +508,6 @@ def main():
     for name, fn in cmds:
         app.add_handler(CommandHandler(name, fn))
 
-    # 排程: 預警 30 分鐘一次,一般榜 60 分鐘
     app.job_queue.run_repeating(push_pre_warning, interval=1800, first=120)
     app.job_queue.run_repeating(push_general, interval=3600, first=300)
 
