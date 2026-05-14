@@ -55,6 +55,16 @@ from tw_stock_scorer import (
     find_tw_institutional_buy,
     DEFAULT_TW_FILTERS,
 )
+# ── V2.3: 美股模組 ─────────────────────────────────────────
+from us_stock_scorer import (
+    UsStockMetrics,
+    fetch_all_us_metrics,
+    find_us_squeeze,
+    find_us_short_squeeze,
+    find_us_momentum,
+    apply_us_filters,
+    DEFAULT_US_FILTERS,
+)
 # ──────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -85,6 +95,17 @@ TW_USER_FILTERS: dict = {}
 TW_MARKET_OPEN  = dtime(9, 0)
 TW_MARKET_CLOSE = dtime(13, 30)
 TW_TZ = timezone(timedelta(hours=8))   # 台灣時區 UTC+8
+
+# V2.3: 美股快取與訂閱
+US_CACHE: dict = {"time": 0, "data": []}
+US_CACHE_TTL   = 600   # 10 分鐘
+US_SUBSCRIBERS: set = set()
+US_USER_FILTERS: dict = {}
+
+# 美股交易時段（美東 EDT UTC-4，夏令 3-11 月）
+US_MARKET_OPEN  = dtime(9, 30)
+US_MARKET_CLOSE = dtime(16, 0)
+ET_TZ = timezone(timedelta(hours=-4))  # EDT（夏令時）
 
 # ============================================================
 # 共用
@@ -290,6 +311,285 @@ def tw_market_status() -> str:
     if t > TW_MARKET_CLOSE:
         return "🔒 今日收盤"
     return "🟢 交易中"
+
+# ============================================================
+# V2.3: 美股工具函式
+# ============================================================
+def us_market_status() -> str:
+    now = datetime.now(ET_TZ)   # 美東時區
+    if now.weekday() >= 5:
+        return "⛔ 週末休市"
+    t = now.time()
+    if t < US_MARKET_OPEN:
+        return "⏰ 尚未開盤（09:30 ET）"
+    if t > US_MARKET_CLOSE:
+        return "🔒 今日收盤"
+    return "🟢 交易中"
+
+async def get_us_scan(force=False) -> list[UsStockMetrics]:
+    now = asyncio.get_event_loop().time()
+    if not force and now - US_CACHE["time"] < US_CACHE_TTL and US_CACHE["data"]:
+        return US_CACHE["data"]
+    data = await fetch_all_us_metrics(top_n=60)
+    US_CACHE.update({"time": now, "data": data})
+    return data
+
+def fmt_us_card(m: UsStockMetrics, rank=None, show_triggers=True) -> str:
+    rank_str  = f"#{rank} " if rank else ""
+    tag_str   = "  ".join(m.tags) if m.tags else ""
+    cap_str   = (f"${m.market_cap/1e12:.2f}T" if m.market_cap >= 1e12
+                 else f"${m.market_cap/1e9:.0f}B" if m.market_cap >= 1e9
+                 else f"${m.market_cap/1e6:.0f}M")
+    lines = [
+        f"{rank_str}*{m.ticker} {m.name}*  {m.direction}",
+        f"├ 總分 *{m.total_score:.0f}*  早分 *{m.early_score:.0f}*  信心 *{m.confidence:.0%}*",
+        f"├ 收盤: ${m.close:,.2f}  漲跌: {m.change_pct:+.2f}%",
+        f"├ 量比: {m.volume_ratio:.1f}x  市值: {cap_str}",
+        f"├ 法人持股: {m.inst_pct:.1%}  空頭比: {m.short_float:.1%}",
+        f"├ RSI: {m.rsi:.0f}  Beta: {m.beta:.1f}",
+    ]
+    if m.support or m.resistance:
+        s = f"${m.support:,.2f}"    if m.support    else "—"
+        r = f"${m.resistance:,.2f}" if m.resistance else "—"
+        lines.append(f"├ 支撐: {s}  阻力: {r}")
+    if show_triggers and m.triggers:
+        for t in m.triggers[:3]:
+            lines.append(f"├ {t}")
+    if tag_str:
+        lines.append(f"├ {tag_str}")
+    chart_url = get_tv_chart_url(m.ticker, timeframe="D", market="us")
+    lines.append(f"└ [📊 TV 圖表]({chart_url})")
+    return "\n".join(lines)
+
+def fmt_us_list(stocks, title, show_triggers=True) -> str:
+    if not stocks:
+        return f"*{title}*\n\n目前沒有符合條件的標的 🌙"
+    mkt = us_market_status()
+    out = [f"*{title}*  _{datetime.now(TW_TZ):%H:%M}_  {mkt}\n"]
+    for i, m in enumerate(stocks[:8], 1):
+        out.append(fmt_us_card(m, i, show_triggers))
+        out.append("")
+    out.append("_資料源: Yahoo Finance (yfinance)_")
+    return "\n".join(out)
+
+def generate_us_trade_advice(m: UsStockMetrics) -> str:
+    price   = m.close
+    is_bull = any(e in m.direction for e in ["🚀", "🔵", "📈"])
+    dir_str = "做多 🟢" if is_bull else "觀望 ⚪"
+    conf    = m.confidence
+    if conf >= 0.8:    conf_str = "非常高 ⭐⭐⭐"
+    elif conf >= 0.65: conf_str = "高 ⭐⭐"
+    elif conf >= 0.5:  conf_str = "中等 ⭐"
+    else:              conf_str = "偏低 ⚠️"
+    pos = m.position_pct
+    pos_block = (
+        "🚫 信心不足，暫時觀望" if pos == 0 else
+        f"━━━ 倉位建議（現股無槓桿）━━━\n"
+        f"🟢 保守: 總資金 `{pos//2}%`\n"
+        f"🟡 標準: 總資金 `{pos}%`\n"
+        f"🔴 積極: 總資金 `{min(pos*2,30)}%`"
+    )
+    if is_bull and m.support:
+        entry_low  = m.support * 0.998
+        entry_high = m.support * 1.015
+        stop_loss  = m.support * 0.975
+        tp1 = m.resistance if m.resistance and m.resistance > price else price * 1.08
+        tp2 = tp1 * 1.05
+        rr  = (tp1 - entry_high) / (entry_high - stop_loss) if entry_high > stop_loss else 0
+        in_zone    = entry_low <= price <= entry_high * 1.02
+        entry_note = "✅ 當前在進場區！" if in_zone else f"⏳ 等待回測，距進場區 {(price-entry_high)/price*100:.1f}%"
+        trade_block = (
+            f"━━━ 進場區間 ━━━\n"
+            f"📍 理想進場: `${entry_low:,.2f}` ~ `${entry_high:,.2f}`\n"
+            f"{entry_note}\n\n"
+            f"━━━ 風險管理 ━━━\n"
+            f"🛑 停損: `${stop_loss:,.2f}`\n"
+            f"🎯 目標1: `${tp1:,.2f}` (+{(tp1-price)/price*100:.1f}%)\n"
+            f"🎯 目標2: `${tp2:,.2f}` (+{(tp2-price)/price*100:.1f}%)\n"
+            f"📊 風報比: `1 : {rr:.1f}` {'✅' if rr >= 2 else '⚠️ 偏低'}\n\n"
+        )
+    else:
+        trade_block = "⚠️ 結構不明確，建議觀望等待更清晰訊號\n\n"
+    warnings = []
+    if abs(m.change_pct) > 8:
+        warnings.append(f"⚠️ 今日已漲跌 {m.change_pct:+.1f}%，波動偏大")
+    if m.short_float >= 0.20:
+        warnings.append(f"⚠️ 空頭比例高 {m.short_float:.0%}，可能劇烈波動")
+    if m.beta >= 2.0:
+        warnings.append(f"⚠️ Beta={m.beta:.1f}，高波動個股")
+    if m.confidence < 0.4:
+        warnings.append("⚠️ 信心偏低，建議等更多訊號")
+    warning_str = "\n".join(warnings) if warnings else "✅ 無特殊警告"
+    cap_str = (f"${m.market_cap/1e12:.2f}T" if m.market_cap >= 1e12
+               else f"${m.market_cap/1e9:.0f}B")
+    chart_block = format_trade_chart_block(m.ticker, "us")
+    return (
+        f"💡 *{m.ticker} {m.name} 交易建議*\n\n"
+        f"收盤: `${price:,.2f}`  {us_market_status()}\n"
+        f"方向: {dir_str}  信心: {conf_str}\n"
+        f"產業: {m.sector or '—'}  市值: {cap_str}\n\n"
+        f"{trade_block}"
+        f"{pos_block}\n\n"
+        f"━━━ 技術面 ━━━\n"
+        f"RSI: {m.rsi:.0f}  Beta: {m.beta:.1f}\n"
+        f"MA20: ${m.ma20:,.2f}  距52W高: {m.dist_52w_high_pct:.1f}%\n\n"
+        f"━━━ 空頭部位 ━━━\n"
+        f"空頭比: {m.short_float:.1%}  回補天數: {m.short_ratio:.1f} 天\n"
+        f"法人持股: {m.inst_pct:.1%}\n\n"
+        f"━━━ 注意事項 ━━━\n"
+        f"{warning_str}\n"
+        f"{chart_block}\n\n"
+        f"_⚠️ 純技術分析，非投資建議，請自行控管風險_"
+    )
+
+# ── 美股指令 ──────────────────────────────────────────────
+async def cmd_us_scan(update, ctx):
+    await update.message.reply_text("🔍 掃描美股中（約 30 秒）...")
+    stocks  = await get_us_scan()
+    f = US_USER_FILTERS.get(update.effective_user.id, DEFAULT_US_FILTERS)
+    filtered = apply_us_filters(stocks, f)
+    text = fmt_us_list(filtered, f"🇺🇸 美股預備暴漲榜（{len(filtered)} 命中）")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_us_squeeze(update, ctx):
+    await update.message.reply_text("🎯 偵測美股 BB 壓縮中...")
+    stocks = await get_us_scan()
+    sq = find_us_squeeze(stocks)
+    text = fmt_us_list(sq, "🎯 美股 BB 壓縮蓄勢榜")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_us_short(update, ctx):
+    await update.message.reply_text("🎯 偵測軋空候選中...")
+    stocks = await get_us_scan()
+    sq = find_us_short_squeeze(stocks)
+    text = fmt_us_list(sq, "🎯 美股軋空候選榜（高空頭比+技術轉強）")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_us_momentum(update, ctx):
+    stocks = await get_us_scan()
+    mo = find_us_momentum(stocks)
+    text = fmt_us_list(mo, "📈 美股動能榜（RSI+均線排列）")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_us_top10(update, ctx):
+    stocks = await get_us_scan()
+    text = fmt_us_list(stocks[:10], "🏆 美股綜合 Top 10", show_triggers=False)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_us_trade(update, ctx):
+    args = ctx.args
+    if not args:
+        await update.message.reply_text("用法：`/us_trade AAPL`", parse_mode=ParseMode.MARKDOWN)
+        return
+    ticker = args[0].upper()
+    await update.message.reply_text(f"💡 分析 {ticker} 中...")
+    stocks = await get_us_scan()
+    m = next((s for s in stocks if s.ticker == ticker), None)
+    if m is None:
+        # 不在快取中，單獨抓取
+        from us_stock_scorer import score_us_stock
+        from us_data_fetcher import fetch_one_us_stock
+        raw = await fetch_one_us_stock(ticker)
+        if not raw.fetch_ok:
+            await update.message.reply_text(f"❌ 找不到 {ticker}，請確認代號")
+            return
+        m = score_us_stock(raw)
+    text = generate_us_trade_advice(m)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=False)
+
+async def cmd_us_detail(update, ctx):
+    args = ctx.args
+    if not args:
+        await update.message.reply_text("用法：`/us_detail AAPL`", parse_mode=ParseMode.MARKDOWN)
+        return
+    ticker = args[0].upper()
+    stocks = await get_us_scan()
+    m = next((s for s in stocks if s.ticker == ticker), None)
+    if m is None:
+        await update.message.reply_text(f"❌ {ticker} 不在掃描清單中，請先執行 /us_scan")
+        return
+    chart_multi = get_tv_chart_url(m.ticker, "D", "us")
+    msg = (
+        f"🔬 *{m.ticker} {m.name} 詳細指標*\n\n"
+        f"收盤: `${m.close:,.2f}`  漲跌: `{m.change_pct:+.2f}%`\n"
+        f"量比: `{m.volume_ratio:.2f}x`  Beta: `{m.beta:.2f}`\n"
+        f"市值: `{'${:.2f}T'.format(m.market_cap/1e12) if m.market_cap>=1e12 else '${:.0f}B'.format(m.market_cap/1e9)}`\n\n"
+        f"*技術指標*\n"
+        f"RSI: `{m.rsi:.1f}`  MA20: `${m.ma20:,.2f}`  MA50: `${m.ma50:,.2f}`\n"
+        f"距52W高: `{m.dist_52w_high_pct:.1f}%`  52W低: `${m.week52_low:,.2f}`\n\n"
+        f"*空頭部位*\n"
+        f"空頭比例: `{m.short_float:.1%}`  回補天數: `{m.short_ratio:.1f}`\n\n"
+        f"*法人*\n"
+        f"持股比例: `{m.inst_pct:.1%}`\n\n"
+        f"*評分明細*\n"
+        f"BB壓縮: `{m.bb_score:.0f}`  量能: `{m.vol_score:.0f}`\n"
+        f"動能: `{m.momentum_score:.0f}`  ATR: `{m.atr_score:.0f}`\n"
+        f"軋空潛力: `{m.short_squeeze_score:.0f}`  法人: `{m.institution_score:.0f}`\n"
+        f"OB+FVG: `{m.ob_fvg_score:.0f}`  *總分: `{m.total_score:.0f}`*\n\n"
+        f"[📊 TV 圖表]({chart_multi})"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=False)
+
+async def cmd_us_status(update, ctx):
+    n = len(US_CACHE.get("data", []))
+    mkt = us_market_status()
+    et_now = datetime.now(ET_TZ)
+    msg = (
+        f"🇺🇸 *美股 Bot 狀態*\n\n"
+        f"市場: {mkt}\n"
+        f"美東時間: {et_now:%Y-%m-%d %H:%M} ET\n"
+        f"台灣時間: {datetime.now(TW_TZ):%H:%M}\n"
+        f"快取股票數: {n} 支\n"
+        f"訂閱人數: {len(US_SUBSCRIBERS)}\n\n"
+        f"指令：/us\\_scan  /us\\_squeeze  /us\\_short\n"
+        f"/us\\_momentum  /us\\_top10\n"
+        f"/us\\_trade AAPL  /us\\_detail AAPL"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_us_sub(update, ctx):
+    US_SUBSCRIBERS.add(update.effective_chat.id)
+    await update.message.reply_text("🔔 已訂閱美股盤前預警！（週一到週五 21:00 台灣時間推送）")
+
+async def cmd_us_unsub(update, ctx):
+    US_SUBSCRIBERS.discard(update.effective_chat.id)
+    await update.message.reply_text("🔕 已取消美股訂閱")
+
+async def push_us_premarket(ctx):
+    """美股盤前預警：每日 21:00 台灣時間（= 09:00 ET 開盤前 30 分）"""
+    if not US_SUBSCRIBERS:
+        return
+    now_tw = datetime.now(TW_TZ)
+    if now_tw.weekday() >= 5:   # 跳過週末
+        return
+    log.info(f"[US] 推送美股盤前預警給 {len(US_SUBSCRIBERS)} 人")
+    try:
+        stocks = await fetch_all_us_metrics(top_n=60)
+    except Exception as e:
+        log.exception(e); return
+    filtered = apply_us_filters(stocks)[:5]
+    if not filtered:
+        return
+    parts = [f"🇺🇸 *美股盤前預警*  _{now_tw:%m/%d %H:%M}_\n"]
+    for i, m in enumerate(filtered, 1):
+        parts.append(fmt_us_card(m, i, show_triggers=True))
+        parts.append("")
+    parts.append("_資料源: Yahoo Finance (yfinance)_")
+    text = "\n".join(parts)
+    for cid in list(US_SUBSCRIBERS):
+        try:
+            await ctx.bot.send_message(cid, text, parse_mode=ParseMode.MARKDOWN,
+                                       disable_web_page_preview=True)
+        except Exception as e:
+            log.warning(f"美股推送失敗 {cid}: {e}")
+            US_SUBSCRIBERS.discard(cid)
 
 async def get_tw_scan(force=False) -> list[TwStockMetrics]:
     now = asyncio.get_event_loop().time()
@@ -576,7 +876,7 @@ async def cmd_tv_status(update, ctx):
 # ============================================================
 async def cmd_start(update, ctx):
     msg = (
-        "👹 *妖幣雷達 V2.2*  _加密 × 台股 × TradingView_\n\n"
+        "👹 *妖幣雷達 V2.3*  _加密 × 台股 × 美股 × TradingView_\n\n"
         "🎯 核心改造: 抓「即將妖動」而非「已經妖動」\n\n"
         "*🪙 加密貨幣*\n"
         "/pre\\_pump 🔋  /pre\\_dump ⚠️  /squeeze 🎯\n"
@@ -586,6 +886,10 @@ async def cmd_start(update, ctx):
         "/tw\\_scan 🔋  /tw\\_squeeze 🎯  /tw\\_foreign 🏦\n"
         "/tw\\_trade 2330 💡  /tw\\_detail 2330\n"
         "/tw\\_top10  /tw\\_status  /tw\\_sub\n\n"
+        "*🇺🇸 美股*\n"
+        "/us\\_scan 🔋  /us\\_squeeze 🎯  /us\\_short 🎯\n"
+        "/us\\_trade AAPL 💡  /us\\_detail AAPL\n"
+        "/us\\_momentum  /us\\_top10  /us\\_status  /us\\_sub\n\n"
         "*📡 TradingView*\n"
         "/sub\\_tv  /unsub\\_tv  /tv\\_status\n\n"
         "/help - 完整說明"
@@ -633,6 +937,17 @@ async def cmd_help(update, ctx):
         "`/tw_status` 台股 Bot 狀態\n"
         "`/tw_sub` 訂閱台股早盤預警\n"
         "`/tw_unsub` 取消台股訂閱\n\n"
+        "*🇺🇸 美股指令*\n"
+        "`/us_scan` 美股預備暴漲榜\n"
+        "`/us_squeeze` BB 壓縮蓄勢\n"
+        "`/us_short` 軋空候選（高空頭比+轉強）\n"
+        "`/us_momentum` 動能榜（RSI+均線）\n"
+        "`/us_top10` 美股 Top 10\n"
+        "`/us_trade AAPL` 💡 完整交易建議\n"
+        "`/us_detail AAPL` 詳細指標\n"
+        "`/us_status` 美股 Bot 狀態\n"
+        "`/us_sub` 訂閱美股盤前預警（21:00 台灣時間）\n"
+        "`/us_unsub` 取消美股訂閱\n\n"
         "⚠️ 不構成投資建議，風險自負"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
@@ -912,7 +1227,8 @@ async def cmd_unsub_all(update, ctx):
     if tv_handler:
         tv_handler.remove_subscriber(cid)
     TW_SUBSCRIBERS.discard(cid)
-    await update.message.reply_text("🔕 已取消全部訂閱（含 TradingView 警報 + 台股預警）")
+    US_SUBSCRIBERS.discard(cid)
+    await update.message.reply_text("🔕 已取消全部訂閱（含 TradingView 警報 + 台股 + 美股預警）")
 
 # ============================================================
 # 排程任務
@@ -1010,6 +1326,17 @@ async def post_init(app):
         BotCommand("tw_status",      "🇹🇼 台股 Bot 狀態"),
         BotCommand("tw_sub",         "🇹🇼 訂閱台股早盤預警"),
         BotCommand("tw_unsub",       "🇹🇼 取消台股訂閱"),
+        # 美股
+        BotCommand("us_scan",        "🇺🇸 美股預備暴漲榜"),
+        BotCommand("us_squeeze",     "🇺🇸 美股 BB 壓縮"),
+        BotCommand("us_short",       "🇺🇸 軋空候選榜"),
+        BotCommand("us_momentum",    "🇺🇸 動能榜"),
+        BotCommand("us_top10",       "🇺🇸 美股 Top 10"),
+        BotCommand("us_trade",       "🇺🇸 美股交易建議 /us_trade AAPL"),
+        BotCommand("us_detail",      "🇺🇸 美股詳細指標 /us_detail AAPL"),
+        BotCommand("us_status",      "🇺🇸 美股 Bot 狀態"),
+        BotCommand("us_sub",         "🇺🇸 訂閱美股盤前預警"),
+        BotCommand("us_unsub",       "🇺🇸 取消美股訂閱"),
         # 設定
         BotCommand("set_score",      "設總分門檻"),
         BotCommand("set_early",      "設早分門檻"),
@@ -1073,6 +1400,17 @@ def main():
         ("tw_status",      cmd_tw_status),
         ("tw_sub",         cmd_tw_sub),
         ("tw_unsub",       cmd_tw_unsub),
+        # V2.3: 美股指令
+        ("us_scan",        cmd_us_scan),
+        ("us_squeeze",     cmd_us_squeeze),
+        ("us_short",       cmd_us_short),
+        ("us_momentum",    cmd_us_momentum),
+        ("us_top10",       cmd_us_top10),
+        ("us_trade",       cmd_us_trade),
+        ("us_detail",      cmd_us_detail),
+        ("us_status",      cmd_us_status),
+        ("us_sub",         cmd_us_sub),
+        ("us_unsub",       cmd_us_unsub),
         # 篩選設定
         ("set_score",      cmd_set_score),
         ("set_early",      cmd_set_early),
@@ -1090,10 +1428,12 @@ def main():
     # 加密版排程
     app.job_queue.run_repeating(push_pre_warning, interval=1800, first=120)
     app.job_queue.run_repeating(push_general,     interval=3600, first=300)
-    # 台股排程：每日 08:50（台灣時間 = UTC 00:50）
+    # 台股排程：每日 08:50 台灣時間（= UTC 00:50）
     app.job_queue.run_daily(push_tw_morning, time=dtime(0, 50))
+    # 美股排程：每日 21:00 台灣時間（= UTC 13:00，美東 09:00 開盤前）
+    app.job_queue.run_daily(push_us_premarket, time=dtime(13, 0))
 
-    log.info("🤖 妖幣 Bot V2.2 啟動（加密 + TradingView + 台股）")
+    log.info("🤖 妖幣 Bot V2.3 啟動（加密 + TradingView + 台股 + 美股）")
     app.run_polling()
 
 if __name__ == "__main__":
