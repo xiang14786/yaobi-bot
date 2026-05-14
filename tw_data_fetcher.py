@@ -143,8 +143,8 @@ async def _fetch_twse_t86_day(
     股數可正（買超）可負（賣超）。
     """
     url = (
-        f"https://www.twse.com.tw/rwd/zh/fund/T86"
-        f"?date={date_str}&selectType=ALLBUT0999&response=json"
+        f"https://www.twse.com.tw/exchangeReport/T86"
+        f"?response=json&date={date_str}&selectType=ALLBUT0999"
     )
     try:
         async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
@@ -194,8 +194,8 @@ async def _fetch_twse_margin_day(
     回傳 {stock_id: {"margin_bal": 股數, "short_bal": 股數}}
     """
     url = (
-        f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
-        f"?date={date_str}&selectType=MS&response=json"
+        f"https://www.twse.com.tw/exchangeReport/MI_MARGN"
+        f"?response=json&date={date_str}&selectType=MS"
     )
     try:
         async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
@@ -444,8 +444,8 @@ async def fetch_top_stocks_by_volume(
     for delta in range(3):
         try_date = (date.today() - timedelta(days=delta)).strftime("%Y%m%d")
         url = (
-            f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX20"
-            f"?date={try_date}&type=IND&response=json"
+            f"https://www.twse.com.tw/exchangeReport/MI_INDEX20"
+            f"?response=json&date={try_date}&type=IND"
         )
         try:
             async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=10), ssl=False) as resp:
