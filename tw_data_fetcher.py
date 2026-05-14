@@ -141,19 +141,21 @@ async def _fetch_twse_t86_day(
             if j.get("stat") not in ("OK", "ok"):
                 return {}
             result = {}
+            fields = j.get("fields", [])
             for row in j.get("data", []):
-                if len(row) < 16:
+                if len(row) < 21:
                     continue
                 sid = str(row[0]).strip()
                 if not (sid.isdigit() and len(sid) == 4):
                     continue
-                # T86 欄位（0-based）：
-                # 4=外資買賣超, 7=投信買賣超, 8=自營商合計買賣超, 15=三大法人合計
+                # T86 欄位（0-based，共 21 欄）：
+                # [4]=外資及陸資買賣超, [10]=投信買賣超
+                # [19]=自營商合計買賣超, [20]=三大法人買賣超合計
                 result[sid] = {
                     "foreign": _parse_int(row[4]),
-                    "trust":   _parse_int(row[7]),
-                    "dealer":  _parse_int(row[8]),
-                    "total":   _parse_int(row[15]),
+                    "trust":   _parse_int(row[10]),
+                    "dealer":  _parse_int(row[19]),
+                    "total":   _parse_int(row[20]),
                 }
             return result
     except Exception as e:
@@ -186,15 +188,17 @@ async def _fetch_twse_margin_day(
                 return {}
             result = {}
             for row in j.get("data", []):
-                if len(row) < 12:
+                if len(row) < 11:
                     continue
                 sid = str(row[0]).strip()
                 if not (sid.isdigit() and len(sid) == 4):
                     continue
-                # MI_MARGN(MS) 欄位：5=融資餘額, 11=融券餘額
+                # MI_MARGN(MS) 欄位（0-based）：
+                # [5]=融資餘額, [10]=融券餘額
+                # 注意：[11]=融券限額（不是餘額！）
                 result[sid] = {
                     "margin_bal": _parse_int(row[5]),
-                    "short_bal":  _parse_int(row[11]),
+                    "short_bal":  _parse_int(row[10]),
                 }
             return result
     except Exception as e:
