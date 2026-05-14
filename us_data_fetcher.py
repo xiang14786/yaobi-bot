@@ -146,43 +146,136 @@ def _fetch_one_sync(ticker: str, period: str = "3mo") -> UsStockData:
 # ──────────────────────────────────────────────
 #  非同步包裝
 # ──────────────────────────────────────────────
-async def fetch_one_us_stock(ticker: str) -> UsStockData:
-    """非同步包裝，供 Bot 呼叫"""
+async def fetch_one_us_stock(ticker: str, timeout: float = 15.0) -> UsStockData:
+    """非同步包裝，供單股查詢（含 t.info）"""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_executor, _fetch_one_sync, ticker)
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(_executor, _fetch_one_sync, ticker),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        log.warning(f"[US] {ticker} 抓取超時({timeout}s)")
+        r = UsStockData(ticker=ticker)
+        r.fetch_ok  = False
+        r.error_msg = "逾時"
+        return r
+
+
+def _bulk_fetch_sync(tickers: list[str]) -> list[UsStockData]:
+    """
+    使用 yf.download() 一次下載所有股票 OHLCV（一個請求，速度快）。
+    跳過容易卡住的 t.info，僅保留技術分析所需欄位。
+    """
+    import yfinance as yf
+
+    import pandas as pd
+    log.info(f"[US] bulk download {len(tickers)} 支...")
+    try:
+        # group_by="column" → columns = MultiIndex(field, ticker) 或 flat(field) if single
+        raw = yf.download(
+            tickers, period="3mo", auto_adjust=True,
+            group_by="column", threads=True,
+            progress=False,
+        )
+    except Exception as e:
+        log.error(f"[US] bulk download 失敗: {e}")
+        return []
+
+    if raw is None or raw.empty:
+        log.warning("[US] bulk download 回傳空資料")
+        return []
+
+    log.info(f"[US] raw shape={raw.shape}, columns type={type(raw.columns).__name__}, "
+             f"is_multi={isinstance(raw.columns, pd.MultiIndex)}")
+
+    is_multi = isinstance(raw.columns, pd.MultiIndex)
+    results: list[UsStockData] = []
+
+    for ticker in tickers:
+        try:
+            if is_multi:
+                # 取單股 slice：columns = (field, ticker)
+                # raw["Close"] 是 DataFrame，raw["Close"][ticker] 是 Series
+                close_col  = raw["Close"][ticker]   if ticker in raw["Close"].columns  else None
+                high_col   = raw["High"][ticker]    if ticker in raw["High"].columns   else None
+                low_col    = raw["Low"][ticker]     if ticker in raw["Low"].columns    else None
+                open_col   = raw["Open"][ticker]    if ticker in raw["Open"].columns   else None
+                vol_col    = raw["Volume"][ticker]  if ticker in raw["Volume"].columns else None
+                if close_col is None:
+                    log.debug(f"[US] {ticker} 不在 MultiIndex 結果中")
+                    continue
+                df = pd.DataFrame({
+                    "Close": close_col, "High": high_col, "Low": low_col,
+                    "Open": open_col,   "Volume": vol_col,
+                })
+            else:
+                # 單股：直接用 raw（flat columns）
+                df = raw.copy()
+
+            df = df.dropna(subset=["Close"]).tail(60)
+            if len(df) < 5:
+                log.debug(f"[US] {ticker} 資料筆數不足 ({len(df)})")
+                continue
+
+            result = UsStockData(ticker=ticker)
+            result.name    = ticker
+            result.closes  = [float(v) for v in df["Close"].tolist()]
+            result.highs   = [float(v) for v in df["High"].tolist()]
+            result.lows    = [float(v) for v in df["Low"].tolist()]
+            result.volumes = [int(v)   for v in df["Volume"].tolist()]
+
+            latest = df.iloc[-1]
+            result.data_date = str(df.index[-1].date())
+            result.close     = float(latest["Close"])
+            result.open_     = float(latest["Open"])
+            result.high      = float(latest["High"])
+            result.low       = float(latest["Low"])
+            result.volume    = int(latest["Volume"])
+
+            if len(result.closes) >= 2 and result.closes[-2] > 0:
+                result.change_pct = (
+                    (result.closes[-1] - result.closes[-2]) / result.closes[-2] * 100
+                )
+
+            if len(result.volumes) >= 20:
+                avg20 = sum(result.volumes[-20:]) / 20
+                result.avg_volume   = int(avg20)
+                result.volume_ratio = result.volume / avg20 if avg20 > 0 else 1.0
+
+            result.fetch_ok = True
+            results.append(result)
+        except Exception as e:
+            log.warning(f"[US] {ticker} parse error: {e}")
+
+    log.info(f"[US] bulk 完成，有效 {len(results)} 支")
+    return results
 
 
 async def fetch_all_us_stocks(
     tickers: list[str] | None = None,
-    top_n: int = 60,
+    top_n: int = 40,
     concurrency: int = 6,
 ) -> list[UsStockData]:
     """
     批量抓取美股資料。
-    tickers=None 時使用 SP500_TOP_STOCKS 預設清單。
-    concurrency 控制同時幾個請求（建議 4-8）。
+    使用 yf.download 一次請求下載所有股票，速度大幅提升。
     """
     if tickers is None:
         tickers = SP500_TOP_STOCKS[:top_n]
 
-    log.info(f"[US] 開始抓取 {len(tickers)} 支美股（並行={concurrency}）...")
-    sem = asyncio.Semaphore(concurrency)
-
-    async def fetch_with_sem(t):
-        async with sem:
-            result = await fetch_one_us_stock(t)
-            await asyncio.sleep(0.2)   # 避免過快
-            return result
-
-    tasks   = [fetch_with_sem(t) for t in tickers]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    stocks = []
-    for r in results:
-        if isinstance(r, UsStockData) and r.fetch_ok and r.close > 0:
-            stocks.append(r)
-        elif isinstance(r, Exception):
-            log.error(f"[US] 異常: {r}")
+    loop = asyncio.get_event_loop()
+    try:
+        stocks = await asyncio.wait_for(
+            loop.run_in_executor(_executor, _bulk_fetch_sync, tickers),
+            timeout=90,
+        )
+    except asyncio.TimeoutError:
+        log.error("[US] bulk download 整體超時 90s")
+        stocks = []
+    except Exception as e:
+        log.error(f"[US] fetch_all 失敗: {e}")
+        stocks = []
 
     log.info(f"[US] 完成，有效 {len(stocks)} 支")
     return stocks

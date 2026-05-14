@@ -51,6 +51,7 @@ from tradingview_webhook import (
 from tw_stock_scorer import (
     TwStockMetrics,
     fetch_all_tw_metrics,
+    fetch_single_tw_metrics,
     find_tw_pre_pump,
     find_tw_squeeze,
     find_tw_institutional_buy,
@@ -1327,52 +1328,92 @@ async def cmd_stock(update, ctx):
 
     # ── 判斷市場：純數字或數字+字母(ETF) → 台股
     if re.match(r'^\d{4,6}[A-Z]?$', target):
-        await update.message.reply_text(f"🇹🇼 查詢台股 {target}...")
-        stocks = await get_tw_scan()
-        m = next((s for s in stocks if s.stock_id == target), None)
-        if not m:
+        await update.message.reply_text(f"🇹🇼 查詢台股 {target}…（首次約需 1-2 分鐘）")
+        try:
+            stocks = await asyncio.wait_for(get_tw_scan(), timeout=120)
+        except asyncio.TimeoutError:
             await update.message.reply_text(
-                f"❌ 找不到 {target}，可能成交量太低未列入掃描\n"
-                f"請確認股票代號（台積電是 `2330`）",
+                "⏱ 台股資料抓取逾時，伺服器背景掃描中\n請 1-2 分鐘後再試",
                 parse_mode=ParseMode.MARKDOWN)
             return
-        # 複用 tw_detail 格式
-        msg = (
-            f"📊 *{m.stock_id} {m.name}*  {m.direction}\n\n"
-            f"收盤: `{m.close:.2f}`  漲跌: `{m.change_pct:+.2f}%`\n"
-            f"成交: `{m.trade_value/1e8:.1f}億`\n\n"
-            f"*法人動向*\n"
-            f"外資: `{m.foreign_net/1e8:+.2f}億`  連續 `{m.foreign_streak:+d}天`\n"
-            f"三大合計: `{m.institutional_net/1e8:+.2f}億`\n\n"
-            f"*融資融券*\n"
-            f"融資變化: `{m.margin_change_pct:+.1f}%`  "
-            f"融券變化: `{m.short_change_pct:+.1f}%`\n\n"
-            f"*技術*\n"
-            f"支撐: `{m.support:.2f}`  阻力: `{m.resistance:.2f}`\n"
-            f"總分: `{m.total_score:.0f}`  信心: `{m.confidence:.0%}`\n"
-        )
-        if m.triggers:
-            msg += "\n*訊號*\n" + "\n".join(f"• {t}" for t in m.triggers[:5])
-        msg += f"\n\n💡 `/tw_trade {target}` 查看完整交易建議"
-        msg += format_trade_chart_block(target, market="tw")
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
-                                        disable_web_page_preview=True)
+        except Exception as e:
+            log.error(f"[/stock] TW scan error: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ 台股掃描失敗: {e}")
+            return
+        m = next((s for s in stocks if s.stock_id == target), None)
+        if not m:
+            # 掃描清單未包含此股，直接查詢
+            await update.message.reply_text(f"🔍 {target} 不在掃描清單，改為直接查詢...")
+            try:
+                m = await asyncio.wait_for(fetch_single_tw_metrics(target), timeout=60)
+            except asyncio.TimeoutError:
+                m = None
+            except Exception as e:
+                log.error(f"[/stock] single fetch error {target}: {e}", exc_info=True)
+                m = None
+            if not m:
+                await update.message.reply_text(
+                    f"❌ 找不到 {target}，請確認股票代號（台積電是 `2330`）",
+                    parse_mode=ParseMode.MARKDOWN)
+                return
+        try:
+            streak = int(m.foreign_streak) if m.foreign_streak is not None else 0
+            msg = (
+                f"📊 *{m.stock_id} {m.name}*  {m.direction}\n\n"
+                f"收盤: `{m.close:.2f}`  漲跌: `{m.change_pct:+.2f}%`\n"
+                f"成交: `{m.trade_value/1e8:.1f}億`\n\n"
+                f"*法人動向*\n"
+                f"外資: `{m.foreign_net/1e8:+.2f}億`  連續 `{streak:+d}天`\n"
+                f"三大合計: `{m.institutional_net/1e8:+.2f}億`\n\n"
+                f"*融資融券*\n"
+                f"融資變化: `{m.margin_change_pct:+.1f}%`  "
+                f"融券變化: `{m.short_change_pct:+.1f}%`\n\n"
+                f"*技術*\n"
+                f"支撐: `{m.support:.2f}`  阻力: `{m.resistance:.2f}`\n"
+                f"總分: `{m.total_score:.0f}`  信心: `{m.confidence:.0%}`\n"
+            )
+            if m.triggers:
+                msg += "\n*訊號*\n" + "\n".join(f"• {t}" for t in m.triggers[:5])
+            msg += f"\n\n💡 `/tw_trade {target}` 查看完整交易建議"
+            msg += format_trade_chart_block(target, market="tw")
+            await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                            disable_web_page_preview=True)
+        except Exception as e:
+            log.error(f"[/stock] TW format error for {target}: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ 格式化失敗: {e}")
         return
 
     # ── 先試加密貨幣
-    coins = await get_scan()
+    try:
+        coins = await asyncio.wait_for(get_scan(), timeout=30)
+    except asyncio.TimeoutError:
+        coins = []
     m_crypto = next((c for c in coins if c.base == target), None)
     if m_crypto:
         await update.message.reply_text(f"🪙 查詢加密貨幣 {target}...")
-        msg = fmt_card(m_crypto, show_triggers=True)
-        msg += f"\n\n💡 `/trade {target}` 查看完整交易建議"
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
-                                        disable_web_page_preview=True)
+        try:
+            msg = fmt_card(m_crypto, show_triggers=True)
+            msg += f"\n\n💡 `/trade {target}` 查看完整交易建議"
+            await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                            disable_web_page_preview=True)
+        except Exception as e:
+            log.error(f"[/stock] crypto format error: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ 格式化失敗: {e}")
         return
 
     # ── 試美股
-    await update.message.reply_text(f"🇺🇸 查詢美股 {target}...")
-    us_stocks = await get_us_scan()
+    await update.message.reply_text(f"🇺🇸 查詢美股 {target}…（首次約需 1-2 分鐘）")
+    try:
+        us_stocks = await asyncio.wait_for(get_us_scan(), timeout=120)
+    except asyncio.TimeoutError:
+        await update.message.reply_text(
+            "⏱ 美股資料抓取逾時，伺服器背景掃描中\n請 1-2 分鐘後再試",
+            parse_mode=ParseMode.MARKDOWN)
+        return
+    except Exception as e:
+        log.error(f"[/stock] US scan error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ 美股掃描失敗: {e}")
+        return
     m_us = next((s for s in us_stocks if s.ticker == target), None)
     if not m_us:
         await update.message.reply_text(
@@ -1382,10 +1423,14 @@ async def cmd_stock(update, ctx):
             f"• 美股請用美股代號（如 `AAPL`）",
             parse_mode=ParseMode.MARKDOWN)
         return
-    msg = fmt_us_card(m_us, show_triggers=True)
-    msg += f"\n\n💡 `/us_trade {target}` 查看完整交易建議"
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
-                                    disable_web_page_preview=True)
+    try:
+        msg = fmt_us_card(m_us, show_triggers=True)
+        msg += f"\n\n💡 `/us_trade {target}` 查看完整交易建議"
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                        disable_web_page_preview=True)
+    except Exception as e:
+        log.error(f"[/stock] US format error for {target}: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ 格式化失敗: {e}")
 
 # ============================================================
 # 啟動 / 關閉 Hook

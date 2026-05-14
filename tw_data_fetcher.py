@@ -607,7 +607,17 @@ async def fetch_top_stocks_by_volume(
                             stocks.append((sid, name))
                 if stocks:
                     log.info(f"[TW] TWSE 成交量排行 {try_date}：{len(stocks)} 支")
-                    return stocks
+                    # 若回傳太少，補上 CORE 清單確保重要標的在列
+                    if len(stocks) < 30:
+                        log.warning(f"[TW] 成交量排行只有 {len(stocks)} 支，補入 CORE_TW50_STOCKS")
+                        existing_ids = {sid for sid, _ in stocks}
+                        for sid, name in CORE_TW50_STOCKS:
+                            if sid not in existing_ids:
+                                stocks.append((sid, name))
+                            if len(stocks) >= top_n:
+                                break
+                        log.info(f"[TW] 補全後：{len(stocks)} 支")
+                    return stocks[:top_n]
         except Exception as e:
             log.debug(f"[TW] MI_INDEX20 {try_date} 失敗（非嚴重）: {e}")
 
@@ -635,6 +645,29 @@ CORE_TW50_STOCKS: list[tuple[str, str]] = [
     ("2912", "統一超"), ("3037", "欣興"), ("6669", "緯穎"),
     ("2337", "旺宏"), ("3231", "緯創"),
 ]
+
+
+# ──────────────────────────────────────────────
+#  直接查單支台股（不需在掃描清單中）
+# ──────────────────────────────────────────────
+async def fetch_single_tw_stock(stock_id: str) -> TwStockData:
+    """
+    直接查詢單支台股完整資料（OHLCV + 三大法人 + 融資融券）。
+    適合 /stock 指令個股查詢，不受掃描清單限制。
+    """
+    _init_rate_limiter()
+    inst_start = (date.today() - timedelta(days=20)).isoformat()
+
+    connector = aiohttp.TCPConnector(limit=5)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        inst_history   = await _fetch_inst_bulk(session, [stock_id], inst_start)
+        margin_history = await _fetch_margin_bulk(session, [stock_id], inst_start)
+        result = await fetch_one_stock(
+            session, stock_id,
+            inst_history=inst_history,
+            margin_history=margin_history,
+        )
+    return result
 
 
 # ──────────────────────────────────────────────

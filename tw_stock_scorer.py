@@ -518,6 +518,15 @@ async def fetch_all_tw_metrics(top_n: int = 50) -> list[TwStockMetrics]:
     return metrics
 
 
+async def fetch_single_tw_metrics(stock_id: str) -> "TwStockMetrics | None":
+    """直接查詢單支台股並評分（不受掃描清單限制，供 /stock 使用）"""
+    from tw_data_fetcher import fetch_single_tw_stock
+    raw = await fetch_single_tw_stock(stock_id)
+    if not raw.fetch_ok:
+        return None
+    return score_tw_stock(raw)
+
+
 # ──────────────────────────────────────────────
 #  篩選工具
 # ──────────────────────────────────────────────
