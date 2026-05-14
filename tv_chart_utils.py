@@ -76,9 +76,18 @@ def _infer_exchange_symbol(symbol: str, market: str = "crypto_perp") -> str:
         return f"TWSE:{symbol}"
 
     elif market == "us":
-        # 簡單判斷：ETF/知名股通常在 NYSE 或 NASDAQ
-        # TradingView 可接受 NASDAQ:AAPL，搜不到會自動跳
-        # 或直接用 symbol 讓 TV 自行搜尋
+        # NYSE 主要股票清單（不用 NASDAQ: 前綴）
+        NYSE_TICKERS = {
+            "JPM","BAC","WFC","GS","MS","C","AXP","V","MA","COF",
+            "BLK","SCHW","JNJ","UNH","PFE","ABBV","MRK","BMY","MDT",
+            "XOM","CVX","WMT","HD","TGT","MCD","NKE","LOW","TJX",
+            "CAT","HON","GE","BA","LMT","RTX","UPS","DE","ETN","MMM",
+            "T","VZ","DIS","CMCSA","NEE","SO","KO","PEP","PM","MO",
+            "BRK-B","MMC","AON","CB","ITW","SHW","APD","WM","GD",
+            "ACN","IBM","SPGI","ICE","CME","ISRG","BSX","SYK","ZTS",
+        }
+        if symbol in NYSE_TICKERS:
+            return f"NYSE:{symbol}"
         return f"NASDAQ:{symbol}"
 
     else:
