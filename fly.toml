@@ -1,0 +1,9 @@
+app = 'yaobi-bot-tw'
+primary_region = 'sin'
+
+[build]
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1

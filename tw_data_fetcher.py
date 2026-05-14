@@ -285,22 +285,136 @@ def _fetch_t86_sync() -> dict[str, dict]:
     return {}
 
 
+def _fetch_t86_for_date(target_date: date) -> dict[str, dict] | None:
+    """
+    抓指定日期的 T86 資料。若無資料（假日/停市）回傳 None。
+    """
+    import warnings as _w, time as _t
+    _w.filterwarnings("ignore", message="Unverified HTTPS request")
+
+    HEADERS_BROWSER = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+    }
+    HEADERS_XHR = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+        "Referer": "https://www.twse.com.tw/zh/trading/fund/T86.html",
+        "Connection": "keep-alive",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    def _parse_int(s) -> int:
+        try:
+            return int(str(s).replace(",", "").replace("--", "0").strip() or 0)
+        except Exception:
+            return 0
+
+    ds = target_date.strftime("%Y%m%d")
+    sess = _requests.Session()
+    try:
+        sess.get("https://www.twse.com.tw/zh/", headers=HEADERS_BROWSER, timeout=10, verify=False)
+        _t.sleep(0.3)
+        url = f"https://www.twse.com.tw/rwd/zh/fund/T86?date={ds}&selectType=ALLBUT0999&response=json"
+        r = sess.get(url, headers=HEADERS_XHR, timeout=15, verify=False)
+        if r.status_code != 200:
+            return None
+        try:
+            j = r.json()
+        except Exception:
+            return None
+        if j.get("stat") not in ("OK", "ok"):
+            return None
+        data_rows = j.get("data", [])
+        fields    = j.get("fields", [])
+        if not data_rows:
+            return None
+
+        def _find_col(keywords):
+            for i, f in enumerate(fields):
+                if all(k in f for k in keywords):
+                    return i
+            return -1
+
+        idx_foreign = _find_col(["外資", "買賣超"])
+        idx_trust   = _find_col(["投信", "買賣超"])
+        idx_dealer  = _find_col(["自營商", "買賣超"])
+        idx_total   = _find_col(["三大法人"])
+        n_cols = len(data_rows[0]) if data_rows else 0
+        if idx_foreign < 0:
+            idx_foreign = 4
+            idx_trust   = 10 if n_cols >= 21 else 7
+            idx_dealer  = 19 if n_cols >= 21 else 8
+            idx_total   = 20 if n_cols >= 21 else 11
+
+        result = {}
+        for row in data_rows:
+            sid = str(row[0]).strip()
+            if not sid.isdigit():
+                continue
+            n = len(row)
+            result[sid] = {
+                "foreign": _parse_int(row[idx_foreign]) if idx_foreign < n else 0,
+                "trust":   _parse_int(row[idx_trust])   if idx_trust   < n else 0,
+                "dealer":  _parse_int(row[idx_dealer])  if idx_dealer  < n else 0,
+                "total":   _parse_int(row[idx_total])   if idx_total   < n else 0,
+            }
+        return result if result else None
+    except Exception as e:
+        log.debug(f"[TW] T86 {ds} 失敗: {e}")
+        return None
+    finally:
+        sess.close()
+
+
+def _fetch_t86_multiday_sync(days: int = 5) -> dict[str, list]:
+    """
+    同步抓最近 N 個交易日的 T86，
+    回傳 {stock_id: [{"date":..., "foreign":..., ...}, ...]} 多天歷史
+    """
+    import time as _t
+    result: dict[str, list] = {}
+    trading_days_found = 0
+    d = date.today()
+
+    while trading_days_found < days and d >= date.today() - timedelta(days=30):
+        if d.weekday() < 5:  # 跳過週末
+            data = _fetch_t86_for_date(d)
+            if data:
+                ds = d.isoformat()
+                for sid, vals in data.items():
+                    if sid not in result:
+                        result[sid] = []
+                    result[sid].insert(0, {"date": ds, **vals})  # 舊→新排列
+                trading_days_found += 1
+                log.info(f"[TW] T86 {ds}: 成功取得 {len(data)} 支")
+                _t.sleep(0.5)  # 避免過快
+            else:
+                log.debug(f"[TW] T86 {d.isoformat()}: 無資料（假日或停市）")
+        d -= timedelta(days=1)
+
+    log.info(f"[TW] T86 多日：取得 {trading_days_found} 個交易日，共 {len(result)} 支")
+    return result
+
+
 async def _fetch_inst_bulk(
     session:    aiohttp.ClientSession,  # 保留相容性，實際不使用
     stock_ids:  list[str],
     start_date: str,
 ) -> dict[str, list]:
     """
-    非同步包裝：在 ThreadPool 執行同步 requests 抓 T86，
-    轉換成 {stock_id: [{"date":..., "foreign":..., ...}]} 格式
+    非同步包裝：在 ThreadPool 執行同步 requests 抓 T86 多天歷史，
+    回傳 {stock_id: [{"date":..., "foreign":..., ...}, ...]} 格式
     """
     loop = asyncio.get_event_loop()
-    raw_data: dict[str, dict] = await loop.run_in_executor(_sync_executor, _fetch_t86_sync)
-
-    today = date.today().isoformat()
-    inst: dict[str, list] = {}
-    for sid, vals in raw_data.items():
-        inst[sid] = [{"date": today, **vals}]
+    inst: dict[str, list] = await loop.run_in_executor(
+        _sync_executor, _fetch_t86_multiday_sync, 10
+    )
 
     set_ids = set(stock_ids)
     matched = sum(1 for sid in inst if sid in set_ids)
@@ -434,8 +548,8 @@ async def fetch_one_stock(
         result.margin_balance = latest_mgn["margin_bal"]
         result.short_balance  = latest_mgn["short_bal"]
 
-        if len(mgn_hist) >= 6:
-            prev = mgn_hist[-6]
+        if len(mgn_hist) >= 2:
+            prev = mgn_hist[-2]   # 前一個交易日
             if prev["margin_bal"] > 0:
                 result.margin_change_pct = (
                     (result.margin_balance - prev["margin_bal"]) / prev["margin_bal"] * 100

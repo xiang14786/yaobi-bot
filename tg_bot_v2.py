@@ -23,6 +23,7 @@ V2.2 新增 (台股版):
 import asyncio
 import logging
 import os
+import re
 import time
 from datetime import datetime, time as dtime, timezone, timedelta
 from telegram import Update, BotCommand
@@ -1280,6 +1281,113 @@ async def push_general(ctx):
             SUBSCRIBERS.discard(cid)
 
 # ============================================================
+# 背景預掃描（每 30 分鐘刷新快取，讓用戶發指令時秒回）
+# ============================================================
+async def background_tw_scan(ctx):
+    """背景台股預掃描，每 30 分鐘刷新快取"""
+    try:
+        await get_tw_scan(force=True)
+        log.info("[背景] 台股快取已刷新")
+    except Exception as e:
+        log.error(f"[背景] 台股掃描失敗: {e}")
+
+async def background_us_scan(ctx):
+    """背景美股預掃描，每 30 分鐘刷新快取"""
+    try:
+        await get_us_scan(force=True)
+        log.info("[背景] 美股快取已刷新")
+    except Exception as e:
+        log.error(f"[背景] 美股掃描失敗: {e}")
+
+async def background_crypto_scan(ctx):
+    """背景加密貨幣預掃描，每 10 分鐘刷新快取"""
+    try:
+        await get_scan(force=True)
+        log.info("[背景] 加密快取已刷新")
+    except Exception as e:
+        log.error(f"[背景] 加密掃描失敗: {e}")
+
+# ============================================================
+# 通用個股查詢 /stock
+# ============================================================
+async def cmd_stock(update, ctx):
+    """/stock 2330 | /stock BTC | /stock AAPL — 通用個股查詢"""
+    if not ctx.args:
+        await update.message.reply_text(
+            "📊 *通用個股查詢*\n\n"
+            "`/stock 2330` — 台股\n"
+            "`/stock BTC`  — 加密貨幣\n"
+            "`/stock AAPL` — 美股",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    raw    = ctx.args[0].strip()
+    target = raw.upper().replace("USDT", "")
+
+    # ── 判斷市場：純數字或數字+字母(ETF) → 台股
+    if re.match(r'^\d{4,6}[A-Z]?$', target):
+        await update.message.reply_text(f"🇹🇼 查詢台股 {target}...")
+        stocks = await get_tw_scan()
+        m = next((s for s in stocks if s.stock_id == target), None)
+        if not m:
+            await update.message.reply_text(
+                f"❌ 找不到 {target}，可能成交量太低未列入掃描\n"
+                f"請確認股票代號（台積電是 `2330`）",
+                parse_mode=ParseMode.MARKDOWN)
+            return
+        # 複用 tw_detail 格式
+        msg = (
+            f"📊 *{m.stock_id} {m.name}*  {m.direction}\n\n"
+            f"收盤: `{m.close:.2f}`  漲跌: `{m.change_pct:+.2f}%`\n"
+            f"成交: `{m.trade_value/1e8:.1f}億`\n\n"
+            f"*法人動向*\n"
+            f"外資: `{m.foreign_net/1e8:+.2f}億`  連續 `{m.foreign_streak:+d}天`\n"
+            f"三大合計: `{m.institutional_net/1e8:+.2f}億`\n\n"
+            f"*融資融券*\n"
+            f"融資變化: `{m.margin_change_pct:+.1f}%`  "
+            f"融券變化: `{m.short_change_pct:+.1f}%`\n\n"
+            f"*技術*\n"
+            f"支撐: `{m.support:.2f}`  阻力: `{m.resistance:.2f}`\n"
+            f"總分: `{m.total_score:.0f}`  信心: `{m.confidence:.0%}`\n"
+        )
+        if m.triggers:
+            msg += "\n*訊號*\n" + "\n".join(f"• {t}" for t in m.triggers[:5])
+        msg += f"\n\n💡 `/tw_trade {target}` 查看完整交易建議"
+        msg += format_trade_chart_block(target, market="tw")
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                        disable_web_page_preview=True)
+        return
+
+    # ── 先試加密貨幣
+    coins = await get_scan()
+    m_crypto = next((c for c in coins if c.base == target), None)
+    if m_crypto:
+        await update.message.reply_text(f"🪙 查詢加密貨幣 {target}...")
+        msg = fmt_card(m_crypto, show_triggers=True)
+        msg += f"\n\n💡 `/trade {target}` 查看完整交易建議"
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                        disable_web_page_preview=True)
+        return
+
+    # ── 試美股
+    await update.message.reply_text(f"🇺🇸 查詢美股 {target}...")
+    us_stocks = await get_us_scan()
+    m_us = next((s for s in us_stocks if s.ticker == target), None)
+    if not m_us:
+        await update.message.reply_text(
+            f"❌ 找不到 {target}\n"
+            f"• 台股請用數字代號（如 `2330`）\n"
+            f"• 加密貨幣請用幣種（如 `BTC`）\n"
+            f"• 美股請用美股代號（如 `AAPL`）",
+            parse_mode=ParseMode.MARKDOWN)
+        return
+    msg = fmt_us_card(m_us, show_triggers=True)
+    msg += f"\n\n💡 `/us_trade {target}` 查看完整交易建議"
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+# ============================================================
 # 啟動 / 關閉 Hook
 # ============================================================
 async def post_init(app):
@@ -1337,6 +1445,8 @@ async def post_init(app):
         BotCommand("us_status",      "🇺🇸 美股 Bot 狀態"),
         BotCommand("us_sub",         "🇺🇸 訂閱美股盤前預警"),
         BotCommand("us_unsub",       "🇺🇸 取消美股訂閱"),
+        # 通用查詢
+        BotCommand("stock",          "📊 查詢個股 /stock 2330 | BTC | AAPL"),
         # 設定
         BotCommand("set_score",      "設總分門檻"),
         BotCommand("set_early",      "設早分門檻"),
@@ -1421,6 +1531,8 @@ def main():
         ("sub_pre",        cmd_sub_pre),
         ("sub",            cmd_sub),
         ("unsub_all",      cmd_unsub_all),
+        # V2.3: 通用查詢
+        ("stock",          cmd_stock),
     ]
     for name, fn in cmds:
         app.add_handler(CommandHandler(name, fn))
@@ -1432,6 +1544,10 @@ def main():
     app.job_queue.run_daily(push_tw_morning, time=dtime(0, 50))
     # 美股排程：每日 21:00 台灣時間（= UTC 13:00，美東 09:00 開盤前）
     app.job_queue.run_daily(push_us_premarket, time=dtime(13, 0))
+    # 背景預掃描（快取暖身，讓用戶發指令時秒回）
+    app.job_queue.run_repeating(background_tw_scan,     interval=1800, first=60)
+    app.job_queue.run_repeating(background_us_scan,     interval=1800, first=180)
+    app.job_queue.run_repeating(background_crypto_scan, interval=600,  first=30)
 
     log.info("🤖 妖幣 Bot V2.3 啟動（加密 + TradingView + 台股 + 美股）")
     app.run_polling()
