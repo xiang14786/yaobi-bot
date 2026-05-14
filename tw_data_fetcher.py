@@ -1,26 +1,20 @@
 """
 tw_data_fetcher.py
 ==================
-台股資料抓取模組
+台股資料抓取模組（全使用 FinMind API）
 
-資料來源：
-  ┌─ FinMind API（需 token）
-  │   → 股價 OHLCV（每支股票 1 次 API）
-  │   → 申請免費 token：https://finmindtrade.com → Register
-  │   → 環境變數：FINMIND_TOKEN
-  │
-  └─ 台灣證交所 TWSE 開放 API（完全免費，不需 token）
-      → 三大法人（T86）：一次取全部股票，10 日歷史
-      → 融資融券（MI_MARGN）：一次取全部股票，10 日歷史
-      → 成交量排行（MI_INDEX20）
+資料來源：FinMind API（需 token）
+  - OHLCV 價格：TaiwanStockPrice
+  - 三大法人：TaiwanStockInstitutionalInvestors
+  - 融資融券：TaiwanStockMarginPurchaseShortSale
 
-FinMind 免費方案限制：
-  - 未登入：每分鐘 30 次 → 掃描 50 支約 5 分鐘
-  - 免費 token：每分鐘 600 次 → 掃描 50 支約 30 秒
+免費 token 限制：600 次/分鐘
+掃描流程（三個分批，避免 422 rate limit）：
+  批次 1 → 三大法人（50 支）
+  批次 2 → 融資融券（50 支）
+  批次 3 → OHLCV（50 支）
 
-使用方式：
-    from tw_data_fetcher import fetch_all_tw_stocks, TwStockData
-    stocks = await fetch_all_tw_stocks(top_n=50)
+環境變數：FINMIND_TOKEN
 """
 
 import os
@@ -30,44 +24,33 @@ import aiohttp
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-# TWSE 需要瀏覽器 User-Agent，否則會被擋
-_TWSE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer":         "https://www.twse.com.tw/zh/",
-    "Connection":      "keep-alive",
-}
-
 log = logging.getLogger("tw_fetcher")
 
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 FINMIND_BASE  = "https://api.finmindtrade.com/api/v4/data"
 
+
 # ──────────────────────────────────────────────
-#  全域 API 限流（僅針對 FinMind，TWSE 不需要）
+#  全域限流設定
 # ──────────────────────────────────────────────
 def _get_rate_config():
     if FINMIND_TOKEN:
-        return dict(sem_count=5, delay=0.15)
+        return dict(sem_count=5, delay=0.12)   # 600次/分 → 每批5並行，間隔120ms
     else:
-        return dict(sem_count=1, delay=2.1)
+        return dict(sem_count=1, delay=2.1)    # 30次/分
 
-_api_sem: asyncio.Semaphore | None = None
+_api_sem:   asyncio.Semaphore | None = None
 _api_delay: float = 2.1
 
 def _init_rate_limiter():
     global _api_sem, _api_delay
     cfg = _get_rate_config()
     if _api_sem is None:
-        _api_sem = asyncio.Semaphore(cfg["sem_count"])
+        _api_sem   = asyncio.Semaphore(cfg["sem_count"])
         _api_delay = cfg["delay"]
-        mode = "有 token（600次/分）" if FINMIND_TOKEN else "無 token（30次/分）"
-        log.info(f"[TW] FinMind 限流：{mode}，並行={cfg['sem_count']}，間隔={cfg['delay']}s")
+        mode = f"有 token（600次/分），並行={cfg['sem_count']}，間隔={cfg['delay']}s" \
+               if FINMIND_TOKEN else "無 token（30次/分）"
+        log.info(f"[TW] FinMind 限流：{mode}")
 
 
 # ──────────────────────────────────────────────
@@ -88,214 +71,40 @@ class TwStockData:
     highs:      list[float] = field(default_factory=list)
     lows:       list[float] = field(default_factory=list)
     volumes:    list[int]   = field(default_factory=list)
-    # 三大法人（單位：元，= 股數 × 收盤價）
-    foreign_net:        float = 0.0
-    trust_net:          float = 0.0
-    dealer_net:         float = 0.0
-    institutional_net:  float = 0.0
-    foreign_streak:     int   = 0
-    # 融資融券
-    margin_buy:         int   = 0
-    margin_sell:        int   = 0
-    margin_balance:     int   = 0
-    margin_change_pct:  float = 0.0
-    short_sell:         int   = 0
-    short_balance:      int   = 0
-    short_change_pct:   float = 0.0
+    # 三大法人（單位：元）
+    foreign_net:       float = 0.0
+    trust_net:         float = 0.0
+    dealer_net:        float = 0.0
+    institutional_net: float = 0.0
+    foreign_streak:    int   = 0
+    # 融資融券（單位：張）
+    margin_buy:        int   = 0
+    margin_sell:       int   = 0
+    margin_balance:    int   = 0
+    margin_change_pct: float = 0.0
+    short_sell:        int   = 0
+    short_balance:     int   = 0
+    short_change_pct:  float = 0.0
     data_date:  str  = ""
     fetch_ok:   bool = True
     error_msg:  str  = ""
 
 
 # ──────────────────────────────────────────────
-#  工具函式
+#  FinMind 通用呼叫（帶重試）
 # ──────────────────────────────────────────────
-def _parse_int(s) -> int:
-    """把 TWSE 帶逗號的數字字串轉 int，失敗回傳 0"""
-    try:
-        return int(str(s).replace(",", "").replace("--", "0").strip() or 0)
-    except Exception:
-        return 0
-
-
-def _recent_trading_dates(n: int = 10) -> list[str]:
-    """回傳最近 n 個可能的交易日（含今日），格式 YYYYMMDD"""
-    dates = []
-    d = date.today()
-    while len(dates) < n:
-        if d.weekday() < 5:   # 排除週六(5)、週日(6)
-            dates.append(d.strftime("%Y%m%d"))
-        d -= timedelta(days=1)
-    return dates
-
-
-# ──────────────────────────────────────────────
-#  TWSE 免費 API：三大法人（T86）
-#  一次 API 呼叫取得所有上市股票當日三大法人資料
-# ──────────────────────────────────────────────
-async def _fetch_twse_t86_day(
-    session: aiohttp.ClientSession,
-    date_str: str,
-) -> dict[str, dict]:
-    """
-    抓取單一日期的三大法人買賣超資料（全市場）。
-    回傳 {stock_id: {"foreign": 股數, "trust": 股數, "dealer": 股數, "total": 股數}}
-    股數可正（買超）可負（賣超）。
-    """
-    url = (
-        f"https://www.twse.com.tw/exchangeReport/T86"
-        f"?response=json&date={date_str}&selectType=ALLBUT0999"
-    )
-    try:
-        async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
-            if resp.status != 200:
-                log.warning(f"[TW] TWSE T86 {date_str} HTTP {resp.status}")
-                return {}
-            j = await resp.json(content_type=None)
-            stat = j.get("stat", "")
-            data_rows = j.get("data", [])
-            if not data_rows:
-                log.debug(f"[TW] TWSE T86 {date_str}: stat={stat!r}，無資料（可能非交易日）")
-                return {}
-            log.debug(f"[TW] TWSE T86 {date_str}: stat={stat!r}，{len(data_rows)} 列")
-            result = {}
-            for row in data_rows:
-                if len(row) < 21:
-                    continue
-                sid = str(row[0]).strip()
-                if not (sid.isdigit() and len(sid) == 4):
-                    continue
-                # T86 欄位（0-based，共 21 欄）：
-                # [4]=外資及陸資買賣超, [10]=投信買賣超
-                # [19]=自營商合計買賣超, [20]=三大法人買賣超合計
-                result[sid] = {
-                    "foreign": _parse_int(row[4]),
-                    "trust":   _parse_int(row[10]),
-                    "dealer":  _parse_int(row[19]),
-                    "total":   _parse_int(row[20]),
-                }
-            log.info(f"[TW] TWSE T86 {date_str}: 解析 {len(result)} 支")
-            return result
-    except Exception as e:
-        log.warning(f"[TW] TWSE T86 {date_str} 失敗: {e}")
-        return {}
-
-
-# ──────────────────────────────────────────────
-#  TWSE 免費 API：融資融券（MI_MARGN）
-#  一次 API 呼叫取得所有股票當日融資融券資料
-# ──────────────────────────────────────────────
-async def _fetch_twse_margin_day(
-    session: aiohttp.ClientSession,
-    date_str: str,
-) -> dict[str, dict]:
-    """
-    抓取單一日期的融資融券資料（全市場）。
-    回傳 {stock_id: {"margin_bal": 股數, "short_bal": 股數}}
-    """
-    url = (
-        f"https://www.twse.com.tw/exchangeReport/MI_MARGN"
-        f"?response=json&date={date_str}&selectType=MS"
-    )
-    try:
-        async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
-            if resp.status != 200:
-                log.warning(f"[TW] TWSE MI_MARGN {date_str} HTTP {resp.status}")
-                return {}
-            j = await resp.json(content_type=None)
-            stat = j.get("stat", "")
-            data_rows = j.get("data", [])
-            if not data_rows:
-                log.debug(f"[TW] TWSE MI_MARGN {date_str}: stat={stat!r}，無資料（可能非交易日）")
-                return {}
-            log.debug(f"[TW] TWSE MI_MARGN {date_str}: stat={stat!r}，{len(data_rows)} 列")
-            result = {}
-            for row in data_rows:
-                if len(row) < 11:
-                    continue
-                sid = str(row[0]).strip()
-                if not (sid.isdigit() and len(sid) == 4):
-                    continue
-                # MI_MARGN(MS) 欄位（0-based）：
-                # [5]=融資餘額, [10]=融券餘額
-                # 注意：[11]=融券限額（不是餘額！）
-                result[sid] = {
-                    "margin_bal": _parse_int(row[5]),
-                    "short_bal":  _parse_int(row[10]),
-                }
-            log.info(f"[TW] TWSE MI_MARGN {date_str}: 解析 {len(result)} 支")
-            return result
-    except Exception as e:
-        log.warning(f"[TW] TWSE MI_MARGN {date_str} 失敗: {e}")
-        return {}
-
-
-# ──────────────────────────────────────────────
-#  批量抓取 TWSE 資料（多日，全股票）
-# ──────────────────────────────────────────────
-async def fetch_twse_bulk(
-    session: aiohttp.ClientSession,
-    days: int = 10,
-) -> tuple[dict[str, list], dict[str, list]]:
-    """
-    抓取最近 days 個交易日的三大法人和融資融券資料。
-
-    回傳：
-        inst_history[stock_id]   = [{"date":..., "foreign":..., ...}, ...]  按日期由舊到新
-        margin_history[stock_id] = [{"date":..., "margin_bal":..., ...}, ...] 按日期由舊到新
-
-    TWSE API 每次呼叫包含全市場所有股票，
-    所以 days 個交易日只需 2*days 次 API，
-    比 FinMind 每支股票各自呼叫效率高很多。
-    """
-    trade_dates = _recent_trading_dates(days)
-    log.info(f"[TW] 抓取 TWSE 三大法人 + 融資券，最近 {days} 個交易日...")
-
-    # 並行抓所有日期（TWSE 無嚴格限流）
-    t86_tasks  = [_fetch_twse_t86_day(session, d)    for d in trade_dates]
-    mgn_tasks  = [_fetch_twse_margin_day(session, d) for d in trade_dates]
-
-    t86_results  = await asyncio.gather(*t86_tasks,  return_exceptions=True)
-    mgn_results  = await asyncio.gather(*mgn_tasks,  return_exceptions=True)
-
-    # 整理成 {stock_id: [{date, 資料}, ...]} 的格式
-    inst_history:   dict[str, list] = {}
-    margin_history: dict[str, list] = {}
-
-    for dt, t86 in zip(trade_dates, t86_results):
-        if isinstance(t86, dict):
-            for sid, vals in t86.items():
-                inst_history.setdefault(sid, []).append({"date": dt, **vals})
-
-    for dt, mgn in zip(trade_dates, mgn_results):
-        if isinstance(mgn, dict):
-            for sid, vals in mgn.items():
-                margin_history.setdefault(sid, []).append({"date": dt, **vals})
-
-    # 按日期由舊到新排序
-    for sid in inst_history:
-        inst_history[sid].sort(key=lambda x: x["date"])
-    for sid in margin_history:
-        margin_history[sid].sort(key=lambda x: x["date"])
-
-    log.info(f"[TW] TWSE 批量資料：三大法人覆蓋 {len(inst_history)} 支，融資券 {len(margin_history)} 支")
-    return inst_history, margin_history
-
-
-# ──────────────────────────────────────────────
-#  FinMind：OHLCV 價格資料（僅用於此）
-# ──────────────────────────────────────────────
-async def _finmind_price(
-    session: aiohttp.ClientSession,
-    stock_id: str,
+async def _finmind_fetch(
+    session:    aiohttp.ClientSession,
+    dataset:    str,
+    stock_id:   str,
     start_date: str,
-    retries: int = 3,
+    retries:    int = 3,
 ) -> list[dict]:
     global _api_sem, _api_delay
     _init_rate_limiter()
 
     params = {
-        "dataset":    "TaiwanStockPrice",
+        "dataset":    dataset,
         "data_id":    stock_id,
         "start_date": start_date,
     }
@@ -307,34 +116,148 @@ async def _finmind_price(
             try:
                 async with session.get(
                     FINMIND_BASE, params=params,
-                    timeout=aiohttp.ClientTimeout(total=15)
+                    timeout=aiohttp.ClientTimeout(total=20)
                 ) as resp:
                     if resp.status == 429:
                         wait = 60 * (attempt + 1)
-                        log.warning(f"[TW] FinMind rate limit {stock_id}，等 {wait}s")
+                        log.warning(f"[TW] FinMind 429 {dataset}/{stock_id}，等 {wait}s")
                         await asyncio.sleep(wait)
                         continue
+                    if resp.status == 422:
+                        log.warning(f"[TW] FinMind 422 {dataset}/{stock_id}（方案不支援或參數錯誤）")
+                        return []
                     if resp.status != 200:
+                        log.warning(f"[TW] FinMind HTTP {resp.status} {dataset}/{stock_id}")
                         return []
                     j = await resp.json()
                     if j.get("status") == 402 or "Limit" in str(j.get("msg", "")):
                         wait = 60 * (attempt + 1)
+                        log.warning(f"[TW] FinMind 速率超限 {dataset}/{stock_id}，等 {wait}s")
                         await asyncio.sleep(wait)
                         continue
                     if j.get("status") != 200:
+                        log.debug(f"[TW] FinMind status={j.get('status')} {dataset}/{stock_id}")
                         return []
                     await asyncio.sleep(_api_delay)
                     return j.get("data", [])
             except asyncio.TimeoutError:
+                log.warning(f"[TW] FinMind timeout {dataset}/{stock_id} (attempt {attempt+1})")
                 await asyncio.sleep(5 * (attempt + 1))
             except Exception as e:
-                log.error(f"[TW] FinMind price {stock_id} error: {e}")
+                log.error(f"[TW] FinMind error {dataset}/{stock_id}: {e}")
                 return []
     return []
 
 
 # ──────────────────────────────────────────────
-#  個股完整資料整合
+#  批量抓取三大法人（FinMind）
+# ──────────────────────────────────────────────
+async def _fetch_inst_bulk(
+    session:    aiohttp.ClientSession,
+    stock_ids:  list[str],
+    start_date: str,
+) -> dict[str, list]:
+    """
+    抓取所有股票的三大法人資料。
+    回傳 {stock_id: [{"date":..., "foreign":..., "trust":..., "dealer":..., "total":...}, ...]}
+    """
+    log.info(f"[TW] 批量抓三大法人 {len(stock_ids)} 支（FinMind）...")
+    sem = asyncio.Semaphore(_get_rate_config()["sem_count"])
+
+    async def fetch_one(sid):
+        async with sem:
+            rows = await _finmind_fetch(session, "TaiwanStockInstitutionalInvestors", sid, start_date)
+            await asyncio.sleep(_get_rate_config()["delay"])
+            return sid, rows
+
+    results = await asyncio.gather(*[fetch_one(sid) for sid in stock_ids], return_exceptions=True)
+
+    inst: dict[str, list] = {}
+    ok_count = 0
+    for r in results:
+        if isinstance(r, Exception):
+            continue
+        sid, rows = r
+        if not rows:
+            continue
+        ok_count += 1
+        daily: dict[str, dict] = {}
+        for row in rows:
+            dt = row.get("date", "")[:10]
+            name = row.get("name", "")
+            val  = float(row.get("buy", 0)) - float(row.get("sell", 0))
+            if name in ("外資及陸資(不含外資自營商)", "外資及陸資"):
+                daily.setdefault(dt, {})["foreign"] = val
+            elif name == "投信":
+                daily.setdefault(dt, {})["trust"] = val
+            elif name in ("自營商合計", "自營商"):
+                daily.setdefault(dt, {})["dealer"] = val
+            elif name == "合計":
+                daily.setdefault(dt, {})["total"] = val
+        entries = []
+        for dt, vals in sorted(daily.items()):
+            entries.append({
+                "date":    dt,
+                "foreign": vals.get("foreign", 0.0),
+                "trust":   vals.get("trust",   0.0),
+                "dealer":  vals.get("dealer",  0.0),
+                "total":   vals.get("total",   0.0),
+            })
+        if entries:
+            inst[sid] = entries
+
+    log.info(f"[TW] 三大法人：{ok_count}/{len(stock_ids)} 支有資料")
+    return inst
+
+
+# ──────────────────────────────────────────────
+#  批量抓取融資融券（FinMind）
+# ──────────────────────────────────────────────
+async def _fetch_margin_bulk(
+    session:    aiohttp.ClientSession,
+    stock_ids:  list[str],
+    start_date: str,
+) -> dict[str, list]:
+    """
+    抓取所有股票的融資融券資料。
+    回傳 {stock_id: [{"date":..., "margin_bal":..., "short_bal":...}, ...]}
+    """
+    log.info(f"[TW] 批量抓融資融券 {len(stock_ids)} 支（FinMind）...")
+    sem = asyncio.Semaphore(_get_rate_config()["sem_count"])
+
+    async def fetch_one(sid):
+        async with sem:
+            rows = await _finmind_fetch(session, "TaiwanStockMarginPurchaseShortSale", sid, start_date)
+            await asyncio.sleep(_get_rate_config()["delay"])
+            return sid, rows
+
+    results = await asyncio.gather(*[fetch_one(sid) for sid in stock_ids], return_exceptions=True)
+
+    margin: dict[str, list] = {}
+    ok_count = 0
+    for r in results:
+        if isinstance(r, Exception):
+            continue
+        sid, rows = r
+        if not rows:
+            continue
+        ok_count += 1
+        entries = []
+        for row in sorted(rows, key=lambda x: x.get("date", "")):
+            entries.append({
+                "date":       row.get("date", "")[:10],
+                "margin_bal": int(row.get("MarginPurchaseBalance", 0) or 0),
+                "short_bal":  int(row.get("ShortSaleBalance", 0) or 0),
+            })
+        if entries:
+            margin[sid] = entries
+
+    log.info(f"[TW] 融資融券：{ok_count}/{len(stock_ids)} 支有資料")
+    return margin
+
+
+# ──────────────────────────────────────────────
+#  個股 OHLCV + 整合資料
 # ──────────────────────────────────────────────
 async def fetch_one_stock(
     session: aiohttp.ClientSession,
@@ -344,15 +267,11 @@ async def fetch_one_stock(
     inst_history:   dict | None = None,
     margin_history: dict | None = None,
 ) -> TwStockData:
-    """
-    抓取單一股票 OHLCV，並套用預先抓好的三大法人和融資券資料。
-    inst_history / margin_history 由 fetch_twse_bulk() 提供。
-    """
     result = TwStockData(stock_id=stock_id, name=name or stock_id)
     start  = (date.today() - timedelta(days=days + 45)).isoformat()
 
-    # ── OHLCV（FinMind）────────────────────────
-    price_data = await _finmind_price(session, stock_id, start)
+    # ── OHLCV ────────────────────────────────
+    price_data = await _finmind_fetch(session, "TaiwanStockPrice", stock_id, start)
     if not price_data:
         result.fetch_ok  = False
         result.error_msg = "無價格資料"
@@ -385,12 +304,12 @@ async def fetch_one_stock(
     if len(result.closes) >= 2 and result.closes[-2] > 0:
         result.change_pct = (result.closes[-1] - result.closes[-2]) / result.closes[-2] * 100
 
-    # ── 三大法人（TWSE T86，股數 → 換算成元）─────
+    # ── 三大法人 ──────────────────────────────
     inst_hist = (inst_history or {}).get(stock_id, [])
     if inst_hist:
         latest_inst = inst_hist[-1]
         cp = result.close or 1.0
-        # 股數 × 收盤價 = 約略金額（元）
+        # FinMind 三大法人單位是「股」，×收盤價 = 元
         result.foreign_net        = latest_inst["foreign"] * cp
         result.trust_net          = latest_inst["trust"]   * cp
         result.dealer_net         = latest_inst["dealer"]  * cp
@@ -399,7 +318,9 @@ async def fetch_one_stock(
         # 外資連續買超天數
         streak, last_sign = 0, None
         for day in reversed(inst_hist):
-            sign = 1 if day["foreign"] > 0 else -1
+            sign = 1 if day["foreign"] > 0 else (-1 if day["foreign"] < 0 else 0)
+            if sign == 0:
+                break
             if last_sign is None:
                 last_sign = sign
             if sign == last_sign:
@@ -407,17 +328,14 @@ async def fetch_one_stock(
             else:
                 break
         result.foreign_streak = streak
-    else:
-        log.debug(f"[TW] {stock_id} 無三大法人資料（TWSE 可能尚未發佈）")
 
-    # ── 融資融券（TWSE MI_MARGN）───────────────
+    # ── 融資融券 ──────────────────────────────
     mgn_hist = (margin_history or {}).get(stock_id, [])
     if mgn_hist:
         latest_mgn = mgn_hist[-1]
         result.margin_balance = latest_mgn["margin_bal"]
         result.short_balance  = latest_mgn["short_bal"]
 
-        # 5 日前對比（計算變化 %）
         if len(mgn_hist) >= 6:
             prev = mgn_hist[-6]
             if prev["margin_bal"] > 0:
@@ -428,30 +346,43 @@ async def fetch_one_stock(
                 result.short_change_pct = (
                     (result.short_balance - prev["short_bal"]) / prev["short_bal"] * 100
                 )
-    else:
-        log.debug(f"[TW] {stock_id} 無融資融券資料（TWSE 可能尚未發佈）")
 
     return result
 
 
 # ──────────────────────────────────────────────
-#  取得掃描股票清單
+#  取得掃描股票清單（TWSE 成交量排行）
 # ──────────────────────────────────────────────
 async def fetch_top_stocks_by_volume(
     session: aiohttp.ClientSession,
     top_n: int = 80,
 ) -> list[tuple[str, str]]:
-    for delta in range(3):
+    """嘗試用 TWSE 取成交量前 N，失敗則 fallback 到 CORE_TW50_STOCKS"""
+    for delta in range(5):
         try_date = (date.today() - timedelta(days=delta)).strftime("%Y%m%d")
         url = (
             f"https://www.twse.com.tw/exchangeReport/MI_INDEX20"
             f"?response=json&date={try_date}&type=IND"
         )
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://www.twse.com.tw/zh/",
+        }
         try:
-            async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=10), ssl=False) as resp:
+            async with session.get(url, headers=headers,
+                                   timeout=aiohttp.ClientTimeout(total=10),
+                                   ssl=False) as resp:
                 if resp.status != 200:
                     continue
-                j = await resp.json(content_type=None)
+                raw = await resp.text()
+                if not raw or raw.strip()[0] != "{":
+                    continue
+                import json as _json
+                j = _json.loads(raw)
                 rows = j.get("data", [])
                 if not rows:
                     continue
@@ -460,13 +391,13 @@ async def fetch_top_stocks_by_volume(
                     if len(row) >= 3:
                         sid  = str(row[1]).strip()
                         name = str(row[2]).strip()
-                        if sid.isdigit() and len(sid) == 4:
+                        if sid.isdigit() and 4 <= len(sid) <= 6:
                             stocks.append((sid, name))
                 if stocks:
                     log.info(f"[TW] TWSE 成交量排行 {try_date}：{len(stocks)} 支")
                     return stocks
         except Exception as e:
-            log.warning(f"[TW] MI_INDEX20 {try_date} 失敗: {e}")
+            log.debug(f"[TW] MI_INDEX20 {try_date} 失敗（非嚴重）: {e}")
 
     log.warning("[TW] 改用 CORE_TW50_STOCKS 預設清單")
     return CORE_TW50_STOCKS[:top_n]
@@ -501,36 +432,49 @@ async def fetch_all_tw_stocks(top_n: int = 50) -> list[TwStockData]:
     """
     掃描台股，回傳完整資料列表。
 
-    流程：
-      1. TWSE 批量抓取三大法人 + 融資券（20 次 API，覆蓋全市場 × 10 日）
-      2. FinMind 抓取各股 OHLCV（每支 1 次 API）
-      3. 整合資料回傳
+    流程（三個分批，嚴格限流）：
+      批次 1 → FinMind 三大法人（all stocks）
+      批次 2 → FinMind 融資融券（all stocks）
+      批次 3 → FinMind OHLCV（all stocks）
     """
     _init_rate_limiter()
-    cfg = _get_rate_config()
     log.info(f"[TW] 開始掃描台股 top {top_n}...")
-
-    stock_sem = asyncio.Semaphore(cfg["sem_count"])
 
     connector = aiohttp.TCPConnector(limit=10)
     async with aiohttp.ClientSession(connector=connector) as session:
-        # 步驟 1：批量抓 TWSE 三大法人 + 融資券（並行，速度快）
-        inst_history, margin_history = await fetch_twse_bulk(session, days=10)
 
-        # 步驟 2：取掃描清單
+        # 步驟 1：取股票清單
         stock_list = await fetch_top_stocks_by_volume(session, top_n)
-        log.info(f"[TW] 開始抓 {len(stock_list)} 支股票 OHLCV...")
+        stock_ids  = [sid for sid, _ in stock_list]
+        name_map   = {sid: name for sid, name in stock_list}
+        log.info(f"[TW] 掃描清單：{len(stock_ids)} 支")
 
-        # 步驟 3：每支股票抓 OHLCV（FinMind），注入 TWSE 資料
-        async def fetch_with_limit(sid, name):
+        # 最近 10 個交易日的起始日期
+        inst_start  = (date.today() - timedelta(days=20)).isoformat()
+        ohlcv_start = (date.today() - timedelta(days=105)).isoformat()
+
+        # 步驟 2：批量三大法人
+        inst_history = await _fetch_inst_bulk(session, stock_ids, inst_start)
+
+        # 步驟 3：批量融資融券
+        margin_history = await _fetch_margin_bulk(session, stock_ids, inst_start)
+
+        # 步驟 4：每支股票 OHLCV
+        log.info(f"[TW] 開始抓 {len(stock_ids)} 支股票 OHLCV...")
+        cfg = _get_rate_config()
+        stock_sem = asyncio.Semaphore(cfg["sem_count"])
+
+        async def fetch_with_limit(sid):
             async with stock_sem:
-                return await fetch_one_stock(
-                    session, sid, name,
+                result = await fetch_one_stock(
+                    session, sid, name_map.get(sid, sid),
                     inst_history=inst_history,
                     margin_history=margin_history,
                 )
+                await asyncio.sleep(cfg["delay"])
+                return result
 
-        tasks   = [fetch_with_limit(sid, name) for sid, name in stock_list]
+        tasks   = [fetch_with_limit(sid) for sid in stock_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     stocks, fail_count = [], 0
