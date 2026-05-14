@@ -229,7 +229,7 @@ async def fetch_one_stock(
     result.high        = float(latest.get("max", 0))
     result.low         = float(latest.get("min", 0))
     result.volume      = int(latest.get("Trading_Volume", 0))
-    result.trade_value = float(latest.get("Trading_Money", 0))
+    result.trade_value = float(latest.get("Trading_money", 0))   # FinMind 欄位小寫 m
 
     # 計算漲跌幅
     if len(result.closes) >= 2 and result.closes[-2] > 0:
