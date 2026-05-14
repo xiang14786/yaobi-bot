@@ -523,9 +523,9 @@ async def fetch_all_tw_metrics(top_n: int = 50) -> list[TwStockMetrics]:
 # ──────────────────────────────────────────────
 DEFAULT_TW_FILTERS = {
     "min_total_score":    45,
-    "min_early_score":    35,
-    "max_change_pct":     8.0,    # 漲停板前才算「尚未啟動」
-    "min_trade_value":    1e8,    # 至少 1 億成交金額
+    "min_early_score":    20,   # 早分上限約 43（BB20+量15+ATR8），20 ≈ 47%
+    "max_change_pct":     8.0,  # 漲停板（10%）前才算「尚未啟動」
+    "min_trade_value":    1e8,  # 至少 1 億成交金額（流動性過濾）
 }
 
 def apply_tw_filters(metrics: list[TwStockMetrics], filters: dict) -> list[TwStockMetrics]:
