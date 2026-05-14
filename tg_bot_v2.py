@@ -1,5 +1,5 @@
 """
-全民 TG 妖幣策略 Bot V2.1
+全民 TG 妖幣策略 Bot V2.2
 ==========================
 V2 重點功能:
 - 🔋 提早預警: 抓「尚未啟動」的妖幣
@@ -12,12 +12,19 @@ V2.1 新增 (TradingView 串接):
 - 📊 所有標的卡片自動附 TradingView 圖表連結
 - 🗺️ /trade /detail /structure 附多時框圖表連結
 - 新指令: /sub_tv /unsub_tv /tv_status
+
+V2.2 新增 (台股版):
+- 🇹🇼 台股妖股雷達，資料來源: FinMind + TWSE
+- 三大法人、融資融券領先指標
+- 倉位建議 % 取代槓桿
+- 新指令: /tw_scan /tw_squeeze /tw_foreign /tw_top10
+          /tw_trade /tw_detail /tw_status /tw_sub /tw_unsub
 """
 import asyncio
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, time as dtime
 from telegram import Update, BotCommand
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -38,6 +45,16 @@ from tradingview_webhook import (
     cmd_unsub_tv as _cmd_unsub_tv,
     cmd_tv_status as _cmd_tv_status,
 )
+
+# ── V2.2: 台股模組 ─────────────────────────────────────────
+from tw_stock_scorer import (
+    TwStockMetrics,
+    fetch_all_tw_metrics,
+    find_tw_pre_pump,
+    find_tw_squeeze,
+    find_tw_institutional_buy,
+    DEFAULT_TW_FILTERS,
+)
 # ──────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -57,6 +74,16 @@ CACHE_TTL = 120
 # V2.1: TradingView Webhook 全域實例（post_init 裡初始化）
 tv_handler: TradingViewWebhookHandler | None = None
 _webhook_runner = None   # aiohttp AppRunner，shutdown 時清理
+
+# V2.2: 台股快取與訂閱
+TW_CACHE: dict = {"time": 0, "data": []}
+TW_CACHE_TTL   = 600   # 10 分鐘
+TW_SUBSCRIBERS: set = set()
+TW_USER_FILTERS: dict = {}
+
+# 台股交易時段
+TW_MARKET_OPEN  = dtime(9, 0)
+TW_MARKET_CLOSE = dtime(13, 30)
 
 # ============================================================
 # 共用
@@ -250,6 +277,275 @@ def generate_trade_advice(m: CoinMetricsV2) -> str:
     )
 
 # ============================================================
+# V2.2: 台股工具函式
+# ============================================================
+def tw_market_status() -> str:
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return "⛔ 週末休市"
+    t = now.time()
+    if t < TW_MARKET_OPEN:
+        return "⏰ 尚未開盤（09:00 開盤）"
+    if t > TW_MARKET_CLOSE:
+        return "🔒 今日收盤"
+    return "🟢 交易中"
+
+async def get_tw_scan(force=False) -> list[TwStockMetrics]:
+    now = asyncio.get_event_loop().time()
+    if not force and now - TW_CACHE["time"] < TW_CACHE_TTL and TW_CACHE["data"]:
+        return TW_CACHE["data"]
+    data = await fetch_all_tw_metrics(top_n=60)
+    TW_CACHE.update({"time": now, "data": data})
+    return data
+
+def fmt_tw_card(m: TwStockMetrics, rank=None, show_triggers=True) -> str:
+    rank_str = f"#{rank} " if rank else ""
+    tag_str  = "  ".join(m.tags) if m.tags else ""
+    val_str  = f"{m.trade_value/1e8:.1f}億" if m.trade_value >= 1e8 else f"{m.trade_value/1e6:.0f}百萬"
+    lines = [
+        f"{rank_str}*{m.stock_id} {m.name}*  {m.direction}",
+        f"├ 總分 *{m.total_score:.0f}*  領先 *{m.early_score:.0f}*  信心 *{m.confidence:.0%}*",
+        f"├ 收盤: ${m.close:,.2f}  漲跌: {m.change_pct:+.2f}%",
+        f"├ 成交: {val_str}",
+        f"├ 外資: {m.foreign_net/1e8:+.1f}億  連續: {m.foreign_streak:+d}天",
+        f"├ 融資變化: {m.margin_change_pct:+.1f}%  融券變化: {m.short_change_pct:+.1f}%",
+    ]
+    if m.support or m.resistance:
+        s = f"${m.support:,.2f}"    if m.support    else "—"
+        r = f"${m.resistance:,.2f}" if m.resistance else "—"
+        lines.append(f"├ 支撐: {s}  阻力: {r}")
+    if show_triggers and m.triggers:
+        for t in m.triggers[:3]:
+            lines.append(f"├ {t}")
+    if tag_str:
+        lines.append(f"├ {tag_str}")
+    chart_url = get_tv_chart_url(m.stock_id, timeframe="D", market="tw")
+    lines.append(f"└ [📊 TV 圖表]({chart_url})")
+    return "\n".join(lines)
+
+def fmt_tw_list(stocks, title, show_triggers=True) -> str:
+    if not stocks:
+        return f"*{title}*\n\n目前沒有符合條件的標的 🌙"
+    mkt = tw_market_status()
+    out = [f"*{title}*  _{datetime.now():%H:%M}_  {mkt}\n"]
+    for i, m in enumerate(stocks[:8], 1):
+        out.append(fmt_tw_card(m, i, show_triggers))
+        out.append("")
+    out.append("_資料源: FinMind API + TWSE_")
+    return "\n".join(out)
+
+def generate_tw_trade_advice(m: TwStockMetrics) -> str:
+    price   = m.close
+    is_bull = any(e in m.direction for e in ["🚀", "🔋", "🔵"])
+    is_bear = any(e in m.direction for e in ["📉", "⚠️"])
+    dir_str = "做多 🟢" if is_bull else "做空 🔴" if is_bear else "觀望 ⚪"
+    conf    = m.confidence
+    if conf >= 0.8:    conf_str = "非常高 ⭐⭐⭐"
+    elif conf >= 0.65: conf_str = "高 ⭐⭐"
+    elif conf >= 0.5:  conf_str = "中等 ⭐"
+    else:              conf_str = "偏低 ⚠️"
+    pos = m.position_pct
+    pos_block = (
+        "🚫 信心不足，暫時觀望" if pos == 0 else
+        f"━━━ 倉位建議（現股無槓桿）━━━\n"
+        f"🟢 保守: 總資金 `{pos//2}%`\n"
+        f"🟡 標準: 總資金 `{pos}%`\n"
+        f"🔴 積極: 總資金 `{min(pos*2,30)}%`"
+    )
+    if is_bull and m.support:
+        entry_low  = m.support * 0.998
+        entry_high = m.support * 1.015
+        stop_loss  = m.support * 0.975
+        tp1 = m.resistance if m.resistance else price * 1.08
+        tp2 = tp1 * 1.05
+        rr  = (tp1 - entry_high) / (entry_high - stop_loss) if entry_high > stop_loss else 0
+        in_zone    = entry_low <= price <= entry_high * 1.02
+        entry_note = "✅ 當前在進場區！" if in_zone else f"⏳ 等待回測，距進場區 {(price-entry_high)/price*100:.1f}%"
+        trade_block = (
+            f"━━━ 進場區間 ━━━\n"
+            f"📍 理想進場: `${entry_low:,.2f}` ~ `${entry_high:,.2f}`\n"
+            f"📍 OB 50%: `${(entry_low+entry_high)/2:,.2f}` ← 最佳點\n"
+            f"{entry_note}\n\n"
+            f"━━━ 風險管理 ━━━\n"
+            f"🛑 停損: `${stop_loss:,.2f}` (跌破出場)\n"
+            f"🎯 目標1: `${tp1:,.2f}` (+{(tp1-price)/price*100:.1f}%)\n"
+            f"🎯 目標2: `${tp2:,.2f}` (+{(tp2-price)/price*100:.1f}%)\n"
+            f"📊 風報比: `1 : {rr:.1f}` {'✅' if rr >= 2 else '⚠️ 偏低'}\n\n"
+        )
+    else:
+        trade_block = "⚠️ 結構不明確，建議觀望等待更清晰訊號\n\n"
+    warnings = []
+    if abs(m.change_pct) > 7:
+        warnings.append(f"⚠️ 今日已漲跌 {m.change_pct:+.1f}%，接近漲跌停")
+    if m.confidence < 0.4:
+        warnings.append("⚠️ 信心偏低，建議等更多訊號")
+    if m.trade_value < 5e8:
+        warnings.append("⚠️ 成交金額偏低，注意流動性")
+    warning_str = "\n".join(warnings) if warnings else "✅ 無特殊警告"
+    return (
+        f"💡 *{m.stock_id} {m.name} 交易建議*\n\n"
+        f"收盤: `${price:,.2f}`  {tw_market_status()}\n"
+        f"方向: {dir_str}\n"
+        f"信心: {conf_str}\n\n"
+        f"{trade_block}"
+        f"{pos_block}\n\n"
+        f"━━━ 法人動向 ━━━\n"
+        f"外資: {m.foreign_net/1e8:+.1f}億  連續 {m.foreign_streak:+d} 天\n"
+        f"三大合計: {m.institutional_net/1e8:+.1f}億\n"
+        f"融資變化: {m.margin_change_pct:+.1f}%  融券變化: {m.short_change_pct:+.1f}%\n\n"
+        f"━━━ 注意事項 ━━━\n"
+        f"{warning_str}\n\n"
+        f"_⚠️ 純技術分析，非投資建議，請自行控管風險_"
+    )
+
+# ── 台股指令 ──────────────────────────────────────────────
+async def cmd_tw_scan(update, ctx):
+    await update.message.reply_text("🔍 掃描台股中...")
+    stocks   = await get_tw_scan()
+    filtered = find_tw_pre_pump(stocks)
+    text = fmt_tw_list(filtered, f"🔋 台股預備暴漲榜 ({len(filtered)} 命中)")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_tw_squeeze(update, ctx):
+    await update.message.reply_text("🎯 偵測 BB 壓縮中...")
+    stocks = await get_tw_scan()
+    sq     = find_tw_squeeze(stocks)
+    text   = fmt_tw_list(sq, "🎯 台股 BB 壓縮蓄勢榜")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_tw_foreign(update, ctx):
+    stocks  = await get_tw_scan()
+    foreign = find_tw_institutional_buy(stocks)
+    text    = fmt_tw_list(foreign, "🏦 外資連續買超榜（≥3天）")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_tw_top10(update, ctx):
+    stocks = await get_tw_scan()
+    text   = fmt_tw_list(stocks[:10], "🏆 台股綜合 Top 10", show_triggers=False)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_tw_trade(update, ctx):
+    if not ctx.args:
+        await update.message.reply_text("用法: `/tw_trade 2330`", parse_mode=ParseMode.MARKDOWN)
+        return
+    target = ctx.args[0].strip()
+    await update.message.reply_text(f"💡 分析台股 {target} 中...")
+    stocks = await get_tw_scan()
+    m = next((s for s in stocks if s.stock_id == target), None)
+    if not m:
+        await update.message.reply_text(
+            f"❌ 找不到 {target}，可能成交量太低未列入掃描\n請確認股票代號（台積電是 `2330`）",
+            parse_mode=ParseMode.MARKDOWN)
+        return
+    advice  = generate_tw_trade_advice(m)
+    advice += format_trade_chart_block(target, market="tw")
+    await update.message.reply_text(advice, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_tw_detail(update, ctx):
+    if not ctx.args:
+        await update.message.reply_text("用法: `/tw_detail 2330`", parse_mode=ParseMode.MARKDOWN)
+        return
+    target = ctx.args[0].strip()
+    stocks = await get_tw_scan()
+    m = next((s for s in stocks if s.stock_id == target), None)
+    if not m:
+        await update.message.reply_text(f"❌ 找不到 {target}")
+        return
+    msg = (
+        f"📊 *{m.stock_id} {m.name} 全維度報告*\n\n"
+        f"*綜合分數*: `{m.total_score:.1f}`\n"
+        f"*領先分數*: `{m.early_score:.1f}` ← 尚未啟動信號\n"
+        f"*方向判讀*: {m.direction}\n"
+        f"*訊號信心*: {m.confidence:.0%}\n\n"
+        f"*技術指標*\n"
+        f"BB 壓縮 `{m.score_bb:.0f}`  量能階梯 `{m.score_vol_ladder:.0f}`\n"
+        f"沉睡甦醒 `{m.score_sleep:.0f}`  波動率 `{m.score_atr:.0f}`\n"
+        f"CVD 背離 `{m.score_cvd:.0f}`  OB+FVG `{m.score_ob_fvg:.0f}`\n\n"
+        f"*台股特有*\n"
+        f"法人動向 `{m.score_institution:.0f}`  融資融券 `{m.score_margin:.0f}`\n\n"
+        f"*法人明細*\n"
+        f"外資: `{m.foreign_net/1e8:+.2f}` 億  連續 `{m.foreign_streak:+d}` 天\n"
+        f"三大法人合計: `{m.institutional_net/1e8:+.2f}` 億\n"
+        f"融資餘額變化: `{m.margin_change_pct:+.1f}%`\n"
+        f"融券餘額變化: `{m.short_change_pct:+.1f}%`\n"
+    )
+    if m.triggers:
+        msg += "\n*觸發訊號*\n" + "\n".join(f"• {t}" for t in m.triggers)
+    msg += f"\n\n💡 `/tw_trade {target}` 查看完整交易建議"
+    msg += format_trade_chart_block(target, market="tw")
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+async def cmd_tw_status(update, ctx):
+    stocks    = TW_CACHE.get("data", [])
+    scan_time = TW_CACHE.get("time", 0)
+    last_str  = "尚未掃描" if scan_time == 0 else (
+        f"{int(asyncio.get_event_loop().time()-scan_time)//60} 分鐘前"
+    )
+    msg = (
+        f"🇹🇼 *台股 Bot 狀態*\n\n"
+        f"{tw_market_status()}\n"
+        f"上次掃描: `{last_str}`\n"
+        f"掃描股票數: `{len(stocks)}`\n\n"
+        f"*當前訊號*\n"
+        f"🔋 預備暴漲: `{len(find_tw_pre_pump(stocks))}` 支\n"
+        f"🎯 BB 壓縮: `{len(find_tw_squeeze(stocks))}` 支\n"
+        f"🏦 外資連買: `{len(find_tw_institutional_buy(stocks))}` 支\n\n"
+        f"*台股訂閱人數*: `{len(TW_SUBSCRIBERS)}` 人\n\n"
+        f"_資料源: FinMind API + TWSE_"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_tw_sub(update, ctx):
+    TW_SUBSCRIBERS.add(update.effective_chat.id)
+    await update.message.reply_text(
+        "🇹🇼 已訂閱台股預警！\n每日 08:50（開盤前）自動推送外資買超與蓄勢標的")
+
+async def cmd_tw_unsub(update, ctx):
+    TW_SUBSCRIBERS.discard(update.effective_chat.id)
+    await update.message.reply_text("🔕 已取消台股訂閱")
+
+# ── 台股排程推送 ──────────────────────────────────────────
+async def push_tw_morning(ctx):
+    """每日 08:50 推送台股開盤前預警"""
+    if not TW_SUBSCRIBERS:
+        return
+    try:
+        stocks = await get_tw_scan(force=True)
+    except Exception as e:
+        log.error(f"台股早盤推送失敗: {e}")
+        return
+    pre  = find_tw_pre_pump(stocks)[:3]
+    fore = find_tw_institutional_buy(stocks)[:3]
+    if not pre and not fore:
+        return
+    parts = [f"🇹🇼 *台股開盤前預警*  _{datetime.now():%m/%d %H:%M}_\n"]
+    if pre:
+        parts.append("*🔋 技術面蓄勢*")
+        for i, m in enumerate(pre, 1):
+            parts.append(fmt_tw_card(m, i, show_triggers=True))
+            parts.append("")
+    if fore:
+        parts.append("*🏦 外資連續買超*")
+        for i, m in enumerate(fore, 1):
+            parts.append(fmt_tw_card(m, i, show_triggers=False))
+            parts.append("")
+    parts.append("💡 `/tw_trade 代號` 查看完整建議")
+    text = "\n".join(parts)
+    for cid in list(TW_SUBSCRIBERS):
+        try:
+            await ctx.bot.send_message(cid, text, parse_mode=ParseMode.MARKDOWN,
+                                       disable_web_page_preview=True)
+        except Exception as e:
+            log.warning(f"台股推送失敗 {cid}: {e}")
+            TW_SUBSCRIBERS.discard(cid)
+
+# ============================================================
 # V2.1: TradingView 指令 Wrapper
 # （讓 async lambda 問題消失，且可直接存取全域 tv_handler）
 # ============================================================
@@ -279,23 +575,18 @@ async def cmd_tv_status(update, ctx):
 # ============================================================
 async def cmd_start(update, ctx):
     msg = (
-        "👹 *妖幣雷達 V2.1*  _提早預警 × TradingView_\n\n"
+        "👹 *妖幣雷達 V2.2*  _加密 × 台股 × TradingView_\n\n"
         "🎯 核心改造: 抓「即將妖動」而非「已經妖動」\n\n"
-        "*核心指令*\n"
-        "/pre\\_pump - 🔋 預備暴漲 (尚未啟動)\n"
-        "/pre\\_dump - ⚠️ 預備暴跌\n"
-        "/squeeze - 🎯 壓縮蓄勢榜\n"
-        "/confidence - 🏆 高信心榜\n"
-        "/scan - 預設條件掃描\n\n"
-        "*查詢*\n"
-        "/detail BTC - 詳細指標\n"
-        "/trade BTC - 💡 完整交易建議\n"
-        "/structure BTC - OB+FVG 結構\n"
-        "/status - 🤖 Bot 運作狀態\n\n"
+        "*🪙 加密貨幣*\n"
+        "/pre\\_pump 🔋  /pre\\_dump ⚠️  /squeeze 🎯\n"
+        "/trade BTC 💡  /detail BTC  /structure BTC\n"
+        "/scan  /top10  /pump  /dump  /status\n\n"
+        "*🇹🇼 台股*\n"
+        "/tw\\_scan 🔋  /tw\\_squeeze 🎯  /tw\\_foreign 🏦\n"
+        "/tw\\_trade 2330 💡  /tw\\_detail 2330\n"
+        "/tw\\_top10  /tw\\_status  /tw\\_sub\n\n"
         "*📡 TradingView*\n"
-        "/sub\\_tv - 訂閱 TV 警報推送\n"
-        "/unsub\\_tv - 取消訂閱\n"
-        "/tv\\_status - Webhook 狀態\n\n"
+        "/sub\\_tv  /unsub\\_tv  /tv\\_status\n\n"
         "/help - 完整說明"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
@@ -331,6 +622,16 @@ async def cmd_help(update, ctx):
         "`/sub_pre` 預警推送 (30 分鐘)\n"
         "`/sub` 榜單推送 (1 小時)\n"
         "`/unsub_all` 取消全部\n\n"
+        "*🇹🇼 台股指令*\n"
+        "`/tw_scan` 預備暴漲榜\n"
+        "`/tw_squeeze` BB 壓縮蓄勢\n"
+        "`/tw_foreign` 外資連買榜\n"
+        "`/tw_top10` 台股 Top 10\n"
+        "`/tw_trade 2330` 💡 完整交易建議\n"
+        "`/tw_detail 2330` 詳細指標\n"
+        "`/tw_status` 台股 Bot 狀態\n"
+        "`/tw_sub` 訂閱台股早盤預警\n"
+        "`/tw_unsub` 取消台股訂閱\n\n"
         "⚠️ 不構成投資建議，風險自負"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
@@ -609,7 +910,8 @@ async def cmd_unsub_all(update, ctx):
     PRE_PUMP_SUBSCRIBERS.discard(cid)
     if tv_handler:
         tv_handler.remove_subscriber(cid)
-    await update.message.reply_text("🔕 已取消全部訂閱（含 TradingView 警報）")
+    TW_SUBSCRIBERS.discard(cid)
+    await update.message.reply_text("🔕 已取消全部訂閱（含 TradingView 警報 + 台股預警）")
 
 # ============================================================
 # 排程任務
@@ -680,6 +982,7 @@ async def post_init(app):
 
     # 設定 Bot 選單
     await app.bot.set_my_commands([
+        # 加密貨幣
         BotCommand("pre_pump",       "🔋 預備暴漲 (尚未啟動)"),
         BotCommand("pre_dump",       "⚠️ 預備暴跌"),
         BotCommand("squeeze",        "🎯 壓縮蓄勢"),
@@ -692,9 +995,21 @@ async def post_init(app):
         BotCommand("detail",         "詳細指標 /detail BTC"),
         BotCommand("structure",      "OB+FVG /structure BTC"),
         BotCommand("status",         "🤖 Bot 運作狀態"),
+        # TradingView
         BotCommand("sub_tv",         "📡 訂閱 TradingView 警報"),
         BotCommand("unsub_tv",       "取消 TradingView 訂閱"),
         BotCommand("tv_status",      "TV Webhook 狀態"),
+        # 台股
+        BotCommand("tw_scan",        "🇹🇼 台股預備暴漲榜"),
+        BotCommand("tw_squeeze",     "🇹🇼 台股 BB 壓縮"),
+        BotCommand("tw_foreign",     "🇹🇼 外資連買榜"),
+        BotCommand("tw_top10",       "🇹🇼 台股 Top 10"),
+        BotCommand("tw_trade",       "🇹🇼 台股交易建議 /tw_trade 2330"),
+        BotCommand("tw_detail",      "🇹🇼 台股詳細指標 /tw_detail 2330"),
+        BotCommand("tw_status",      "🇹🇼 台股 Bot 狀態"),
+        BotCommand("tw_sub",         "🇹🇼 訂閱台股早盤預警"),
+        BotCommand("tw_unsub",       "🇹🇼 取消台股訂閱"),
+        # 設定
         BotCommand("set_score",      "設總分門檻"),
         BotCommand("set_early",      "設早分門檻"),
         BotCommand("set_max_change", "設最大已動 %"),
@@ -747,6 +1062,16 @@ def main():
         ("sub_tv",         cmd_sub_tv),
         ("unsub_tv",       cmd_unsub_tv),
         ("tv_status",      cmd_tv_status),
+        # V2.2: 台股指令
+        ("tw_scan",        cmd_tw_scan),
+        ("tw_squeeze",     cmd_tw_squeeze),
+        ("tw_foreign",     cmd_tw_foreign),
+        ("tw_top10",       cmd_tw_top10),
+        ("tw_trade",       cmd_tw_trade),
+        ("tw_detail",      cmd_tw_detail),
+        ("tw_status",      cmd_tw_status),
+        ("tw_sub",         cmd_tw_sub),
+        ("tw_unsub",       cmd_tw_unsub),
         # 篩選設定
         ("set_score",      cmd_set_score),
         ("set_early",      cmd_set_early),
@@ -761,10 +1086,13 @@ def main():
     for name, fn in cmds:
         app.add_handler(CommandHandler(name, fn))
 
+    # 加密版排程
     app.job_queue.run_repeating(push_pre_warning, interval=1800, first=120)
     app.job_queue.run_repeating(push_general,     interval=3600, first=300)
+    # 台股排程：每日 08:50（台灣時間 = UTC 00:50）
+    app.job_queue.run_daily(push_tw_morning, time=dtime(0, 50))
 
-    log.info("🤖 妖幣 Bot V2.1 啟動（含 TradingView 整合）")
+    log.info("🤖 妖幣 Bot V2.2 啟動（加密 + TradingView + 台股）")
     app.run_polling()
 
 if __name__ == "__main__":
