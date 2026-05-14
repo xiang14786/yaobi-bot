@@ -150,63 +150,76 @@ async def _finmind_fetch(
 
 
 # ──────────────────────────────────────────────
-#  批量抓取三大法人（FinMind）
+#  批量抓取三大法人
+#  來源：TWSE Open Data（opendata.twse.com.tw）
+#  一次 API 拿全市場當日資料，和 www.twse.com.tw 不同域名，不會被 Railway 擋
 # ──────────────────────────────────────────────
 async def _fetch_inst_bulk(
     session:    aiohttp.ClientSession,
     stock_ids:  list[str],
-    start_date: str,
+    start_date: str,          # 保留參數相容性，此來源只取最新一日
 ) -> dict[str, list]:
     """
-    抓取所有股票的三大法人資料。
-    回傳 {stock_id: [{"date":..., "foreign":..., "trust":..., "dealer":..., "total":...}, ...]}
+    用 TWSE Open Data API 抓最新一日三大法人資料（全市場一次搞定）。
+    回傳 {stock_id: [{"date":..., "foreign":..., "trust":..., "dealer":..., "total":...}]}
     """
-    log.info(f"[TW] 批量抓三大法人 {len(stock_ids)} 支（FinMind）...")
-    sem = asyncio.Semaphore(_get_rate_config()["sem_count"])
+    OPENDATA_T86 = "https://opendata.twse.com.tw/v1/fund/T86"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
 
-    async def fetch_one(sid):
-        async with sem:
-            rows = await _finmind_fetch(session, "TaiwanStockInstitutionalInvestors", sid, start_date)
-            await asyncio.sleep(_get_rate_config()["delay"])
-            return sid, rows
-
-    results = await asyncio.gather(*[fetch_one(sid) for sid in stock_ids], return_exceptions=True)
+    log.info("[TW] 三大法人 → TWSE Open Data (opendata.twse.com.tw)...")
+    try:
+        async with session.get(
+            OPENDATA_T86, headers=headers,
+            timeout=aiohttp.ClientTimeout(total=20),
+            ssl=False,
+        ) as resp:
+            if resp.status != 200:
+                log.warning(f"[TW] TWSE opendata T86 HTTP {resp.status}")
+                return {}
+            raw = await resp.text()
+            if not raw or not raw.strip().startswith("["):
+                log.warning(f"[TW] TWSE opendata T86 回應非 JSON array，前50字: {raw[:50]!r}")
+                return {}
+            import json as _json
+            rows = _json.loads(raw)
+    except Exception as e:
+        log.warning(f"[TW] TWSE opendata T86 失敗: {e}")
+        return {}
 
     inst: dict[str, list] = {}
-    ok_count = 0
-    for r in results:
-        if isinstance(r, Exception):
-            continue
-        sid, rows = r
-        if not rows:
-            continue
-        ok_count += 1
-        daily: dict[str, dict] = {}
-        for row in rows:
-            dt = row.get("date", "")[:10]
-            name = row.get("name", "")
-            val  = float(row.get("buy", 0)) - float(row.get("sell", 0))
-            if name in ("外資及陸資(不含外資自營商)", "外資及陸資"):
-                daily.setdefault(dt, {})["foreign"] = val
-            elif name == "投信":
-                daily.setdefault(dt, {})["trust"] = val
-            elif name in ("自營商合計", "自營商"):
-                daily.setdefault(dt, {})["dealer"] = val
-            elif name == "合計":
-                daily.setdefault(dt, {})["total"] = val
-        entries = []
-        for dt, vals in sorted(daily.items()):
-            entries.append({
-                "date":    dt,
-                "foreign": vals.get("foreign", 0.0),
-                "trust":   vals.get("trust",   0.0),
-                "dealer":  vals.get("dealer",  0.0),
-                "total":   vals.get("total",   0.0),
-            })
-        if entries:
-            inst[sid] = entries
+    today = date.today().isoformat()
 
-    log.info(f"[TW] 三大法人：{ok_count}/{len(stock_ids)} 支有資料")
+    for row in rows:
+        sid = str(row.get("證券代號", "")).strip()
+        if not sid or not sid.isdigit():
+            continue
+        def _n(key):
+            try:
+                return int(str(row.get(key, "0") or "0").replace(",", "") or 0)
+            except Exception:
+                return 0
+        foreign = _n("外資及陸資(不含外資自營商)買賣超股數")
+        trust   = _n("投信買賣超股數")
+        dealer  = _n("自營商合計買賣超股數")
+        total   = _n("三大法人買賣超股數合計")
+        inst[sid] = [{
+            "date":    today,
+            "foreign": foreign,
+            "trust":   trust,
+            "dealer":  dealer,
+            "total":   total,
+        }]
+
+    set_ids = set(stock_ids)
+    matched = sum(1 for sid in inst if sid in set_ids)
+    log.info(f"[TW] 三大法人：opendata 共 {len(inst)} 支，掃描清單命中 {matched} 支")
     return inst
 
 
