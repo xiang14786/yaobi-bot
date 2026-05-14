@@ -231,19 +231,42 @@ def _fetch_t86_sync() -> dict[str, dict]:
                         tried += 1
                         d -= timedelta(days=1)
                         continue
-                    if j.get("stat") in ("OK", "ok") and j.get("data"):
+                    data_rows = j.get("data", [])
+                    fields    = j.get("fields", [])
+                    log.info(f"[TW] T86 session/{ds}: stat={j.get('stat')!r}, {len(data_rows)} 列, 欄數={len(data_rows[0]) if data_rows else 0}, fields={fields[:5]}")
+                    if j.get("stat") in ("OK", "ok") and data_rows:
+                        # 動態用 fields 陣列找正確欄位索引
+                        def _find_col(keywords):
+                            for i, f in enumerate(fields):
+                                if all(k in f for k in keywords):
+                                    return i
+                            return -1
+
+                        idx_foreign = _find_col(["外資", "買賣超"])
+                        idx_trust   = _find_col(["投信", "買賣超"])
+                        idx_dealer  = _find_col(["自營商", "買賣超"])
+                        idx_total   = _find_col(["三大法人"])
+
+                        # fallback：根據欄數判斷格式
+                        n_cols = len(data_rows[0]) if data_rows else 0
+                        if idx_foreign < 0:
+                            idx_foreign = 4
+                            idx_trust   = 10 if n_cols >= 21 else 7
+                            idx_dealer  = 19 if n_cols >= 21 else 8
+                            idx_total   = 20 if n_cols >= 21 else 11
+                        log.info(f"[TW] T86 欄位索引: 外資={idx_foreign}, 投信={idx_trust}, 自營={idx_dealer}, 合計={idx_total}")
+
                         result: dict[str, dict] = {}
-                        for row in j["data"]:
-                            if len(row) < 21:
-                                continue
+                        for row in data_rows:
                             sid = str(row[0]).strip()
                             if not sid.isdigit():
                                 continue
+                            n = len(row)
                             result[sid] = {
-                                "foreign": _parse_int(row[4]),
-                                "trust":   _parse_int(row[10]),
-                                "dealer":  _parse_int(row[19]),
-                                "total":   _parse_int(row[20]),
+                                "foreign": _parse_int(row[idx_foreign]) if idx_foreign < n else 0,
+                                "trust":   _parse_int(row[idx_trust])   if idx_trust   < n else 0,
+                                "dealer":  _parse_int(row[idx_dealer])  if idx_dealer  < n else 0,
+                                "total":   _parse_int(row[idx_total])   if idx_total   < n else 0,
                             }
                         if result:
                             log.info(f"[TW] T86 session/{ds}: 成功解析 {len(result)} 支")
