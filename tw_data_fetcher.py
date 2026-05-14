@@ -134,7 +134,7 @@ async def _fetch_twse_t86_day(
         f"?date={date_str}&selectType=ALLBUT0999&response=json"
     )
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
             if resp.status != 200:
                 return {}
             j = await resp.json(content_type=None)
@@ -180,7 +180,7 @@ async def _fetch_twse_margin_day(
         f"?date={date_str}&selectType=MS&response=json"
     )
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
             if resp.status != 200:
                 return {}
             j = await resp.json(content_type=None)
@@ -424,7 +424,7 @@ async def fetch_top_stocks_by_volume(
             f"?date={try_date}&type=IND&response=json"
         )
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), ssl=False) as resp:
                 if resp.status != 200:
                     continue
                 j = await resp.json(content_type=None)
