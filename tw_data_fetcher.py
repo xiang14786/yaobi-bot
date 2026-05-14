@@ -162,39 +162,20 @@ async def _finmind_fetch(
 #  用 requests 而不是 aiohttp，繞過 aiohttp 的 SSL/proxy 問題
 # ──────────────────────────────────────────────
 def _fetch_t86_sync() -> dict[str, dict]:
-    """同步抓取三大法人，依序嘗試多個來源"""
+    """
+    同步抓取三大法人（台灣 IP 可正常存取 TWSE）。
+    來源：opendata.twse.com.tw → exchangeReport/T86
+    """
     _HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept":   "application/json, text/plain, */*",
-        "Referer":  "https://www.twse.com.tw/zh/",
+        "Accept":  "application/json, text/plain, */*",
+        "Referer": "https://www.twse.com.tw/zh/",
     }
     _warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-
-    today = date.today()
-    # 嘗試最近 3 個交易日（避免今天尚未發布）
-    candidates = []
-    d = today
-    while len(candidates) < 3:
-        if d.weekday() < 5:
-            candidates.append(d)
-        d -= timedelta(days=1)
-
-    # ── 來源 1：opendata.twse.com.tw ──────────────
-    urls_to_try = [
-        ("opendata", "https://opendata.twse.com.tw/v1/fund/T86", None),
-    ]
-    # ── 來源 2：exchangeReport（帶日期，試最近 3 天）──
-    for cd in candidates:
-        ds = cd.strftime("%Y%m%d")
-        urls_to_try.append((
-            f"exchangeReport/{ds}",
-            f"https://www.twse.com.tw/exchangeReport/T86?response=json&date={ds}&selectType=ALLBUT0999",
-            "twse_table",
-        ))
 
     def _parse_int(s) -> int:
         try:
@@ -202,63 +183,68 @@ def _fetch_t86_sync() -> dict[str, dict]:
         except Exception:
             return 0
 
-    for label, url, fmt in urls_to_try:
-        try:
-            r = _requests.get(url, headers=_HEADERS, timeout=15, verify=False)
-            log.info(f"[TW] T86 {label}: HTTP {r.status_code}，body前80: {r.text[:80]!r}")
-            if r.status_code != 200:
-                continue
-            txt = r.text.strip()
-            if not txt:
-                continue
-
-            if fmt == "twse_table":
-                # TWSE JSON table 格式：{stat, data:[[],...]}
-                j = r.json()
-                if j.get("stat") not in ("OK", "ok") or not j.get("data"):
+    # ── 來源 1：opendata.twse.com.tw（無 date 參數，直接拿最新）────
+    try:
+        r = _requests.get(
+            "https://opendata.twse.com.tw/v1/fund/T86",
+            headers=_HEADERS, timeout=15, verify=False,
+        )
+        if r.status_code == 200 and r.text.strip().startswith("["):
+            rows = r.json()
+            result: dict[str, dict] = {}
+            for row in rows:
+                sid = str(row.get("證券代號", "")).strip()
+                if not sid or not sid.isdigit():
                     continue
-                result: dict[str, dict] = {}
-                for row in j["data"]:
-                    if len(row) < 21:
-                        continue
-                    sid = str(row[0]).strip()
-                    if not sid.isdigit():
-                        continue
-                    result[sid] = {
-                        "foreign": _parse_int(row[4]),
-                        "trust":   _parse_int(row[10]),
-                        "dealer":  _parse_int(row[19]),
-                        "total":   _parse_int(row[20]),
-                    }
-                log.info(f"[TW] T86 {label}: 解析 {len(result)} 支")
+                result[sid] = {
+                    "foreign": _parse_int(row.get("外資及陸資(不含外資自營商)買賣超股數", 0)),
+                    "trust":   _parse_int(row.get("投信買賣超股數", 0)),
+                    "dealer":  _parse_int(row.get("自營商合計買賣超股數", 0)),
+                    "total":   _parse_int(row.get("三大法人買賣超股數合計", 0)),
+                }
+            if result:
+                log.info(f"[TW] T86 opendata: 解析 {len(result)} 支")
                 return result
+    except Exception as e:
+        log.debug(f"[TW] T86 opendata 失敗: {e}")
 
-            else:
-                # opendata 格式：[{"證券代號":..., ...}, ...]
-                if not txt.startswith("["):
-                    log.warning(f"[TW] T86 {label}: 非 JSON array，跳過")
-                    continue
-                rows = r.json()
-                result = {}
-                for row in rows:
-                    sid = str(row.get("證券代號", "")).strip()
-                    if not sid or not sid.isdigit():
-                        continue
-                    result[sid] = {
-                        "foreign": _parse_int(row.get("外資及陸資(不含外資自營商)買賣超股數", 0)),
-                        "trust":   _parse_int(row.get("投信買賣超股數", 0)),
-                        "dealer":  _parse_int(row.get("自營商合計買賣超股數", 0)),
-                        "total":   _parse_int(row.get("三大法人買賣超股數合計", 0)),
-                    }
-                log.info(f"[TW] T86 {label}: 解析 {len(result)} 支")
-                if result:
-                    return result
+    # ── 來源 2：exchangeReport/T86（最近 3 個交易日）────────────
+    d = date.today()
+    tried = 0
+    while tried < 3:
+        if d.weekday() < 5:
+            ds = d.strftime("%Y%m%d")
+            url = (
+                f"https://www.twse.com.tw/exchangeReport/T86"
+                f"?response=json&date={ds}&selectType=ALLBUT0999"
+            )
+            try:
+                r = _requests.get(url, headers=_HEADERS, timeout=15, verify=False)
+                if r.status_code == 200 and r.text.strip().startswith("{"):
+                    j = r.json()
+                    if j.get("stat") in ("OK", "ok") and j.get("data"):
+                        result = {}
+                        for row in j["data"]:
+                            if len(row) < 21:
+                                continue
+                            sid = str(row[0]).strip()
+                            if not sid.isdigit():
+                                continue
+                            result[sid] = {
+                                "foreign": _parse_int(row[4]),
+                                "trust":   _parse_int(row[10]),
+                                "dealer":  _parse_int(row[19]),
+                                "total":   _parse_int(row[20]),
+                            }
+                        if result:
+                            log.info(f"[TW] T86 exchangeReport/{ds}: 解析 {len(result)} 支")
+                            return result
+            except Exception as e:
+                log.debug(f"[TW] T86 exchangeReport/{ds} 失敗: {e}")
+            tried += 1
+        d -= timedelta(days=1)
 
-        except Exception as e:
-            log.warning(f"[TW] T86 {label} 失敗: {e}")
-            continue
-
-    log.warning("[TW] T86 全部來源均失敗，三大法人資料不可用")
+    log.warning("[TW] T86 所有來源均失敗")
     return {}
 
 
