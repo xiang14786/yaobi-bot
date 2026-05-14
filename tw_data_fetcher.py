@@ -21,8 +21,14 @@ import os
 import asyncio
 import logging
 import aiohttp
+import requests as _requests
+import warnings as _warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+
+# 用 ThreadPoolExecutor 執行同步 requests（TWSE 三大法人用）
+_sync_executor = ThreadPoolExecutor(max_workers=2)
 
 log = logging.getLogger("tw_fetcher")
 
@@ -150,76 +156,132 @@ async def _finmind_fetch(
 
 
 # ──────────────────────────────────────────────
-#  批量抓取三大法人
-#  來源：TWSE Open Data（opendata.twse.com.tw）
-#  一次 API 拿全市場當日資料，和 www.twse.com.tw 不同域名，不會被 Railway 擋
+#  三大法人（同步 requests，跑在 ThreadPoolExecutor）
+#  來源 1：opendata.twse.com.tw（TWSE 開放資料，不同 CDN）
+#  來源 2：www.twse.com.tw exchangeReport/T86（備用）
+#  用 requests 而不是 aiohttp，繞過 aiohttp 的 SSL/proxy 問題
 # ──────────────────────────────────────────────
-async def _fetch_inst_bulk(
-    session:    aiohttp.ClientSession,
-    stock_ids:  list[str],
-    start_date: str,          # 保留參數相容性，此來源只取最新一日
-) -> dict[str, list]:
-    """
-    用 TWSE Open Data API 抓最新一日三大法人資料（全市場一次搞定）。
-    回傳 {stock_id: [{"date":..., "foreign":..., "trust":..., "dealer":..., "total":...}]}
-    """
-    OPENDATA_T86 = "https://opendata.twse.com.tw/v1/fund/T86"
-    headers = {
+def _fetch_t86_sync() -> dict[str, dict]:
+    """同步抓取三大法人，依序嘗試多個來源"""
+    _HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept": "application/json",
+        "Accept":   "application/json, text/plain, */*",
+        "Referer":  "https://www.twse.com.tw/zh/",
     }
+    _warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
-    log.info("[TW] 三大法人 → TWSE Open Data (opendata.twse.com.tw)...")
-    try:
-        async with session.get(
-            OPENDATA_T86, headers=headers,
-            timeout=aiohttp.ClientTimeout(total=20),
-            ssl=False,
-        ) as resp:
-            if resp.status != 200:
-                log.warning(f"[TW] TWSE opendata T86 HTTP {resp.status}")
-                return {}
-            raw = await resp.text()
-            if not raw or not raw.strip().startswith("["):
-                log.warning(f"[TW] TWSE opendata T86 回應非 JSON array，前50字: {raw[:50]!r}")
-                return {}
-            import json as _json
-            rows = _json.loads(raw)
-    except Exception as e:
-        log.warning(f"[TW] TWSE opendata T86 失敗: {e}")
-        return {}
+    today = date.today()
+    # 嘗試最近 3 個交易日（避免今天尚未發布）
+    candidates = []
+    d = today
+    while len(candidates) < 3:
+        if d.weekday() < 5:
+            candidates.append(d)
+        d -= timedelta(days=1)
 
-    inst: dict[str, list] = {}
-    today = date.today().isoformat()
+    # ── 來源 1：opendata.twse.com.tw ──────────────
+    urls_to_try = [
+        ("opendata", "https://opendata.twse.com.tw/v1/fund/T86", None),
+    ]
+    # ── 來源 2：exchangeReport（帶日期，試最近 3 天）──
+    for cd in candidates:
+        ds = cd.strftime("%Y%m%d")
+        urls_to_try.append((
+            f"exchangeReport/{ds}",
+            f"https://www.twse.com.tw/exchangeReport/T86?response=json&date={ds}&selectType=ALLBUT0999",
+            "twse_table",
+        ))
 
-    for row in rows:
-        sid = str(row.get("證券代號", "")).strip()
-        if not sid or not sid.isdigit():
+    def _parse_int(s) -> int:
+        try:
+            return int(str(s).replace(",", "").replace("--", "0").strip() or 0)
+        except Exception:
+            return 0
+
+    for label, url, fmt in urls_to_try:
+        try:
+            r = _requests.get(url, headers=_HEADERS, timeout=15, verify=False)
+            log.info(f"[TW] T86 {label}: HTTP {r.status_code}，body前80: {r.text[:80]!r}")
+            if r.status_code != 200:
+                continue
+            txt = r.text.strip()
+            if not txt:
+                continue
+
+            if fmt == "twse_table":
+                # TWSE JSON table 格式：{stat, data:[[],...]}
+                j = r.json()
+                if j.get("stat") not in ("OK", "ok") or not j.get("data"):
+                    continue
+                result: dict[str, dict] = {}
+                for row in j["data"]:
+                    if len(row) < 21:
+                        continue
+                    sid = str(row[0]).strip()
+                    if not sid.isdigit():
+                        continue
+                    result[sid] = {
+                        "foreign": _parse_int(row[4]),
+                        "trust":   _parse_int(row[10]),
+                        "dealer":  _parse_int(row[19]),
+                        "total":   _parse_int(row[20]),
+                    }
+                log.info(f"[TW] T86 {label}: 解析 {len(result)} 支")
+                return result
+
+            else:
+                # opendata 格式：[{"證券代號":..., ...}, ...]
+                if not txt.startswith("["):
+                    log.warning(f"[TW] T86 {label}: 非 JSON array，跳過")
+                    continue
+                rows = r.json()
+                result = {}
+                for row in rows:
+                    sid = str(row.get("證券代號", "")).strip()
+                    if not sid or not sid.isdigit():
+                        continue
+                    result[sid] = {
+                        "foreign": _parse_int(row.get("外資及陸資(不含外資自營商)買賣超股數", 0)),
+                        "trust":   _parse_int(row.get("投信買賣超股數", 0)),
+                        "dealer":  _parse_int(row.get("自營商合計買賣超股數", 0)),
+                        "total":   _parse_int(row.get("三大法人買賣超股數合計", 0)),
+                    }
+                log.info(f"[TW] T86 {label}: 解析 {len(result)} 支")
+                if result:
+                    return result
+
+        except Exception as e:
+            log.warning(f"[TW] T86 {label} 失敗: {e}")
             continue
-        def _n(key):
-            try:
-                return int(str(row.get(key, "0") or "0").replace(",", "") or 0)
-            except Exception:
-                return 0
-        foreign = _n("外資及陸資(不含外資自營商)買賣超股數")
-        trust   = _n("投信買賣超股數")
-        dealer  = _n("自營商合計買賣超股數")
-        total   = _n("三大法人買賣超股數合計")
-        inst[sid] = [{
-            "date":    today,
-            "foreign": foreign,
-            "trust":   trust,
-            "dealer":  dealer,
-            "total":   total,
-        }]
+
+    log.warning("[TW] T86 全部來源均失敗，三大法人資料不可用")
+    return {}
+
+
+async def _fetch_inst_bulk(
+    session:    aiohttp.ClientSession,  # 保留相容性，實際不使用
+    stock_ids:  list[str],
+    start_date: str,
+) -> dict[str, list]:
+    """
+    非同步包裝：在 ThreadPool 執行同步 requests 抓 T86，
+    轉換成 {stock_id: [{"date":..., "foreign":..., ...}]} 格式
+    """
+    loop = asyncio.get_event_loop()
+    raw_data: dict[str, dict] = await loop.run_in_executor(_sync_executor, _fetch_t86_sync)
+
+    today = date.today().isoformat()
+    inst: dict[str, list] = {}
+    for sid, vals in raw_data.items():
+        inst[sid] = [{"date": today, **vals}]
 
     set_ids = set(stock_ids)
     matched = sum(1 for sid in inst if sid in set_ids)
-    log.info(f"[TW] 三大法人：opendata 共 {len(inst)} 支，掃描清單命中 {matched} 支")
+    log.info(f"[TW] 三大法人：共 {len(inst)} 支，掃描清單命中 {matched} 支")
     return inst
 
 
