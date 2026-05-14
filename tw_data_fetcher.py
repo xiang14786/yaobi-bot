@@ -136,13 +136,17 @@ async def _fetch_twse_t86_day(
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
             if resp.status != 200:
+                log.warning(f"[TW] TWSE T86 {date_str} HTTP {resp.status}")
                 return {}
             j = await resp.json(content_type=None)
-            if j.get("stat") not in ("OK", "ok"):
+            stat = j.get("stat", "")
+            data_rows = j.get("data", [])
+            if not data_rows:
+                log.debug(f"[TW] TWSE T86 {date_str}: stat={stat!r}，無資料（可能非交易日）")
                 return {}
+            log.debug(f"[TW] TWSE T86 {date_str}: stat={stat!r}，{len(data_rows)} 列")
             result = {}
-            fields = j.get("fields", [])
-            for row in j.get("data", []):
+            for row in data_rows:
                 if len(row) < 21:
                     continue
                 sid = str(row[0]).strip()
@@ -157,9 +161,10 @@ async def _fetch_twse_t86_day(
                     "dealer":  _parse_int(row[19]),
                     "total":   _parse_int(row[20]),
                 }
+            log.info(f"[TW] TWSE T86 {date_str}: 解析 {len(result)} 支")
             return result
     except Exception as e:
-        log.debug(f"[TW] TWSE T86 {date_str} 失敗: {e}")
+        log.warning(f"[TW] TWSE T86 {date_str} 失敗: {e}")
         return {}
 
 
@@ -182,12 +187,17 @@ async def _fetch_twse_margin_day(
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
             if resp.status != 200:
+                log.warning(f"[TW] TWSE MI_MARGN {date_str} HTTP {resp.status}")
                 return {}
             j = await resp.json(content_type=None)
-            if j.get("stat") not in ("OK", "ok"):
+            stat = j.get("stat", "")
+            data_rows = j.get("data", [])
+            if not data_rows:
+                log.debug(f"[TW] TWSE MI_MARGN {date_str}: stat={stat!r}，無資料（可能非交易日）")
                 return {}
+            log.debug(f"[TW] TWSE MI_MARGN {date_str}: stat={stat!r}，{len(data_rows)} 列")
             result = {}
-            for row in j.get("data", []):
+            for row in data_rows:
                 if len(row) < 11:
                     continue
                 sid = str(row[0]).strip()
@@ -200,9 +210,10 @@ async def _fetch_twse_margin_day(
                     "margin_bal": _parse_int(row[5]),
                     "short_bal":  _parse_int(row[10]),
                 }
+            log.info(f"[TW] TWSE MI_MARGN {date_str}: 解析 {len(result)} 支")
             return result
     except Exception as e:
-        log.debug(f"[TW] TWSE MI_MARGN {date_str} 失敗: {e}")
+        log.warning(f"[TW] TWSE MI_MARGN {date_str} 失敗: {e}")
         return {}
 
 
