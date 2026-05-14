@@ -24,7 +24,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone, timedelta
 from telegram import Update, BotCommand
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -84,6 +84,7 @@ TW_USER_FILTERS: dict = {}
 # 台股交易時段
 TW_MARKET_OPEN  = dtime(9, 0)
 TW_MARKET_CLOSE = dtime(13, 30)
+TW_TZ = timezone(timedelta(hours=8))   # 台灣時區 UTC+8
 
 # ============================================================
 # 共用
@@ -130,7 +131,7 @@ def fmt_card(c: CoinMetricsV2, rank=None, show_triggers=True) -> str:
 def fmt_list(coins, title, show_triggers=True):
     if not coins:
         return f"*{title}*\n\n目前沒有符合條件的標的 🌙"
-    out = [f"*{title}*  _{datetime.now():%H:%M}_\n"]
+    out = [f"*{title}*  _{datetime.now(TW_TZ):%H:%M}_\n"]
     for i, c in enumerate(coins[:8], 1):
         out.append(fmt_card(c, i, show_triggers))
         out.append("")
@@ -280,7 +281,7 @@ def generate_trade_advice(m: CoinMetricsV2) -> str:
 # V2.2: 台股工具函式
 # ============================================================
 def tw_market_status() -> str:
-    now = datetime.now()
+    now = datetime.now(TW_TZ)   # 使用台灣時區 UTC+8
     if now.weekday() >= 5:
         return "⛔ 週末休市"
     t = now.time()
@@ -327,7 +328,7 @@ def fmt_tw_list(stocks, title, show_triggers=True) -> str:
     if not stocks:
         return f"*{title}*\n\n目前沒有符合條件的標的 🌙"
     mkt = tw_market_status()
-    out = [f"*{title}*  _{datetime.now():%H:%M}_  {mkt}\n"]
+    out = [f"*{title}*  _{datetime.now(TW_TZ):%H:%M}_  {mkt}\n"]
     for i, m in enumerate(stocks[:8], 1):
         out.append(fmt_tw_card(m, i, show_triggers))
         out.append("")
@@ -524,7 +525,7 @@ async def push_tw_morning(ctx):
     fore = find_tw_institutional_buy(stocks)[:3]
     if not pre and not fore:
         return
-    parts = [f"🇹🇼 *台股開盤前預警*  _{datetime.now():%m/%d %H:%M}_\n"]
+    parts = [f"🇹🇼 *台股開盤前預警*  _{datetime.now(TW_TZ):%m/%d %H:%M}_\n"]
     if pre:
         parts.append("*🔋 技術面蓄勢*")
         for i, m in enumerate(pre, 1):
@@ -928,7 +929,7 @@ async def push_pre_warning(ctx):
     pre_dump = find_pre_dump(coins)[:3]
     if not pre_pump and not pre_dump:
         return
-    parts = [f"🔋 *預警快訊*  _{datetime.now():%H:%M}_\n"]
+    parts = [f"🔋 *預警快訊*  _{datetime.now(TW_TZ):%H:%M}_\n"]
     if pre_pump:
         parts.append("*預備暴漲*")
         for i, c in enumerate(pre_pump, 1):
