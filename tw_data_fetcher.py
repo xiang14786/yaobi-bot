@@ -30,6 +30,19 @@ import aiohttp
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+# TWSE 需要瀏覽器 User-Agent，否則會被擋
+_TWSE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept":          "application/json, text/plain, */*",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer":         "https://www.twse.com.tw/zh/",
+    "Connection":      "keep-alive",
+}
+
 log = logging.getLogger("tw_fetcher")
 
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
@@ -134,7 +147,7 @@ async def _fetch_twse_t86_day(
         f"?date={date_str}&selectType=ALLBUT0999&response=json"
     )
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
+        async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
             if resp.status != 200:
                 log.warning(f"[TW] TWSE T86 {date_str} HTTP {resp.status}")
                 return {}
@@ -185,7 +198,7 @@ async def _fetch_twse_margin_day(
         f"?date={date_str}&selectType=MS&response=json"
     )
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
+        async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=12), ssl=False) as resp:
             if resp.status != 200:
                 log.warning(f"[TW] TWSE MI_MARGN {date_str} HTTP {resp.status}")
                 return {}
@@ -435,7 +448,7 @@ async def fetch_top_stocks_by_volume(
             f"?date={try_date}&type=IND&response=json"
         )
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), ssl=False) as resp:
+            async with session.get(url, headers=_TWSE_HEADERS, timeout=aiohttp.ClientTimeout(total=10), ssl=False) as resp:
                 if resp.status != 200:
                     continue
                 j = await resp.json(content_type=None)
