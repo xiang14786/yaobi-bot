@@ -436,10 +436,10 @@ def score_us_stock(d: UsStockData) -> UsStockMetrics:
 #  篩選函式
 # ──────────────────────────────────────────────
 DEFAULT_US_FILTERS = {
-    "min_score":      40,
-    "min_early":      12,
-    "min_market_cap": 5e9,    # 50 億美金以上
-    "max_change_pct": 15.0,   # 單日漲跌幅上限（排除異常）
+    "min_score":      45,    # 總分上限 100，45% 以上才進
+    "min_early":      18,    # 早分上限約 45（BB20+量15+ATR10），18 ≈ 40%
+    "min_market_cap": 5e9,   # 50 億美金以上（排除小型股）
+    "max_change_pct": 10.0,  # S&P500 單日超過 10% 通常是異常事件
 }
 
 def find_us_squeeze(metrics: list[UsStockMetrics], top_n=10) -> list[UsStockMetrics]:
