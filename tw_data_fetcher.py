@@ -177,7 +177,7 @@ def _fetch_t86_sync() -> dict[str, dict]:
         ),
         "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",   # 不含 br，requests 不支援 Brotli 解壓
         "Connection":      "keep-alive",
     }
     HEADERS_XHR = {
@@ -188,7 +188,7 @@ def _fetch_t86_sync() -> dict[str, dict]:
         ),
         "Accept":          "application/json, text/plain, */*",
         "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",   # 不含 br，requests 不支援 Brotli 解壓
         "Referer":         "https://www.twse.com.tw/zh/trading/fund/T86.html",
         "Connection":      "keep-alive",
         "X-Requested-With": "XMLHttpRequest",
@@ -221,11 +221,16 @@ def _fetch_t86_sync() -> dict[str, dict]:
                     f"?date={ds}&selectType=ALLBUT0999&response=json"
                 )
                 r = sess.get(url, headers=HEADERS_XHR, timeout=15, verify=False)
-                txt = r.text.strip()
-                log.info(f"[TW] T86 session/{ds}: HTTP {r.status_code}, 前60字: {txt[:60]!r}")
+                log.info(f"[TW] T86 session/{ds}: HTTP {r.status_code}, 前60字: {r.text[:60]!r}")
 
-                if r.status_code == 200 and txt.startswith("{"):
-                    j = r.json()
+                if r.status_code == 200:
+                    try:
+                        j = r.json()
+                    except Exception:
+                        log.debug(f"[TW] T86 session/{ds}: JSON 解析失敗，跳過")
+                        tried += 1
+                        d -= timedelta(days=1)
+                        continue
                     if j.get("stat") in ("OK", "ok") and j.get("data"):
                         result: dict[str, dict] = {}
                         for row in j["data"]:
