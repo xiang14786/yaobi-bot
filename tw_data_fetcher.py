@@ -163,19 +163,36 @@ async def _finmind_fetch(
 # ──────────────────────────────────────────────
 def _fetch_t86_sync() -> dict[str, dict]:
     """
-    同步抓取三大法人（台灣 IP 可正常存取 TWSE）。
-    來源：opendata.twse.com.tw → exchangeReport/T86
+    同步抓取三大法人。
+    策略：先抓 TWSE 首頁取得 session cookies，再帶 cookies 請求 T86 JSON。
+    模擬真實瀏覽器行為，繞過 TWSE 的非瀏覽器請求偵測。
     """
-    _HEADERS = {
+    _warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+
+    HEADERS_BROWSER = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept":  "application/json, text/plain, */*",
-        "Referer": "https://www.twse.com.tw/zh/",
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection":      "keep-alive",
     }
-    _warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+    HEADERS_XHR = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept":          "application/json, text/plain, */*",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer":         "https://www.twse.com.tw/zh/trading/fund/T86.html",
+        "Connection":      "keep-alive",
+        "X-Requested-With": "XMLHttpRequest",
+    }
 
     def _parse_int(s) -> int:
         try:
@@ -183,47 +200,34 @@ def _fetch_t86_sync() -> dict[str, dict]:
         except Exception:
             return 0
 
-    # ── 來源 1：opendata.twse.com.tw（無 date 參數，直接拿最新）────
-    try:
-        r = _requests.get(
-            "https://opendata.twse.com.tw/v1/fund/T86",
-            headers=_HEADERS, timeout=15, verify=False,
-        )
-        if r.status_code == 200 and r.text.strip().startswith("["):
-            rows = r.json()
-            result: dict[str, dict] = {}
-            for row in rows:
-                sid = str(row.get("證券代號", "")).strip()
-                if not sid or not sid.isdigit():
-                    continue
-                result[sid] = {
-                    "foreign": _parse_int(row.get("外資及陸資(不含外資自營商)買賣超股數", 0)),
-                    "trust":   _parse_int(row.get("投信買賣超股數", 0)),
-                    "dealer":  _parse_int(row.get("自營商合計買賣超股數", 0)),
-                    "total":   _parse_int(row.get("三大法人買賣超股數合計", 0)),
-                }
-            if result:
-                log.info(f"[TW] T86 opendata: 解析 {len(result)} 支")
-                return result
-    except Exception as e:
-        log.debug(f"[TW] T86 opendata 失敗: {e}")
+    import time as _time
 
-    # ── 來源 2：exchangeReport/T86（最近 3 個交易日）────────────
-    d = date.today()
-    tried = 0
-    while tried < 3:
-        if d.weekday() < 5:
-            ds = d.strftime("%Y%m%d")
-            url = (
-                f"https://www.twse.com.tw/exchangeReport/T86"
-                f"?response=json&date={ds}&selectType=ALLBUT0999"
-            )
-            try:
-                r = _requests.get(url, headers=_HEADERS, timeout=15, verify=False)
-                if r.status_code == 200 and r.text.strip().startswith("{"):
+    # ── 方法：Session + 先拿 cookie ──────────────────────────
+    sess = _requests.Session()
+    try:
+        # 第一步：抓首頁建立 session（取得 cookies）
+        sess.get("https://www.twse.com.tw/zh/", headers=HEADERS_BROWSER,
+                 timeout=10, verify=False)
+        _time.sleep(0.5)  # 模擬人類行為停頓
+
+        # 第二步：找最近有資料的交易日（最多試 5 天）
+        d = date.today()
+        tried = 0
+        while tried < 5:
+            if d.weekday() < 5:
+                ds = d.strftime("%Y%m%d")
+                url = (
+                    f"https://www.twse.com.tw/rwd/zh/fund/T86"
+                    f"?date={ds}&selectType=ALLBUT0999&response=json"
+                )
+                r = sess.get(url, headers=HEADERS_XHR, timeout=15, verify=False)
+                txt = r.text.strip()
+                log.info(f"[TW] T86 session/{ds}: HTTP {r.status_code}, 前60字: {txt[:60]!r}")
+
+                if r.status_code == 200 and txt.startswith("{"):
                     j = r.json()
                     if j.get("stat") in ("OK", "ok") and j.get("data"):
-                        result = {}
+                        result: dict[str, dict] = {}
                         for row in j["data"]:
                             if len(row) < 21:
                                 continue
@@ -237,14 +241,19 @@ def _fetch_t86_sync() -> dict[str, dict]:
                                 "total":   _parse_int(row[20]),
                             }
                         if result:
-                            log.info(f"[TW] T86 exchangeReport/{ds}: 解析 {len(result)} 支")
+                            log.info(f"[TW] T86 session/{ds}: 成功解析 {len(result)} 支")
                             return result
-            except Exception as e:
-                log.debug(f"[TW] T86 exchangeReport/{ds} 失敗: {e}")
-            tried += 1
-        d -= timedelta(days=1)
+                    else:
+                        log.debug(f"[TW] T86 session/{ds}: stat={j.get('stat')!r}，無資料")
+                tried += 1
+            d -= timedelta(days=1)
 
-    log.warning("[TW] T86 所有來源均失敗")
+    except Exception as e:
+        log.warning(f"[TW] T86 session 方法失敗: {e}")
+    finally:
+        sess.close()
+
+    log.warning("[TW] T86 所有方法均失敗，三大法人不可用")
     return {}
 
 
