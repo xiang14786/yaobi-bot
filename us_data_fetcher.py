@@ -117,7 +117,10 @@ def _fetch_one_sync(ticker: str, period: str = "3mo") -> UsStockData:
             result.name        = info.get("shortName", ticker)
             result.sector      = info.get("sector", "")
             result.avg_volume  = int(info.get("averageVolume10days", 0) or 0)
-            result.inst_pct    = float(info.get("institutionPercentHeld", 0) or 0)
+            result.inst_pct    = float(
+                info.get("heldPercentInstitutions") or
+                info.get("institutionPercentHeld") or 0
+            )
             result.short_float = float(info.get("shortPercentOfFloat", 0) or 0)
             result.short_ratio = float(info.get("shortRatio", 0) or 0)
             result.market_cap  = float(info.get("marketCap", 0) or 0)
