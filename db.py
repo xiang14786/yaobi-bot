@@ -68,6 +68,12 @@ def init_db():
                 user_id  INTEGER NOT NULL,
                 PRIMARY KEY (channel, user_id)
             );
+            CREATE TABLE IF NOT EXISTS user_filters (
+                user_id  INTEGER NOT NULL,
+                market   TEXT    NOT NULL,   -- crypto / tw / us
+                filters  TEXT    NOT NULL,   -- JSON
+                PRIMARY KEY (user_id, market)
+            );
         """)
     log.info(f"[DB] 初始化完成：{DB_PATH}")
 
@@ -215,4 +221,39 @@ def delete_subscriber(channel: str, user_id: int):
     with _conn() as c:
         c.execute("DELETE FROM subscribers WHERE channel=? AND user_id=?",
                   (channel, user_id))
+
+
+# ── 用戶篩選設定 ──────────────────────────────────
+import json as _json
+
+def load_user_filters(market: str) -> dict[int, dict]:
+    """載入所有用戶的篩選設定，{user_id: {key: val}}"""
+    result: dict[int, dict] = {}
+    with _conn() as c:
+        for row in c.execute(
+            "SELECT user_id, filters FROM user_filters WHERE market=?", (market,)
+        ):
+            try:
+                result[row["user_id"]] = _json.loads(row["filters"])
+            except Exception:
+                pass
+    return result
+
+
+def save_user_filter(user_id: int, market: str, filters: dict):
+    with _conn() as c:
+        c.execute("""
+            INSERT INTO user_filters (user_id, market, filters)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, market) DO UPDATE SET filters=excluded.filters
+        """, (user_id, market, _json.dumps(filters)))
+
+
+def delete_user_filter(user_id: int, market: str | None = None):
+    with _conn() as c:
+        if market:
+            c.execute("DELETE FROM user_filters WHERE user_id=? AND market=?",
+                      (user_id, market))
+        else:
+            c.execute("DELETE FROM user_filters WHERE user_id=?", (user_id,))
 

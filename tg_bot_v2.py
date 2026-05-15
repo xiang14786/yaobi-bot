@@ -1021,64 +1021,136 @@ async def cmd_start(update, ctx):
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
-async def cmd_help(update, ctx):
-    msg = (
-        "*完整指令*\n\n"
-        "*🎯 提早預警*\n"
-        "`/pre_pump` 即將暴漲\n"
-        "`/pre_dump` 即將暴跌\n"
-        "`/squeeze` BB 壓縮 + OI 建倉\n"
-        "`/confidence` 多訊號共振\n\n"
-        "*📊 查詢*\n"
-        "`/scan` 個人篩選掃描\n"
+# ── /help 指令內容字典 ────────────────────────────────────
+_HELP_SECTIONS = {
+    "crypto": (
+        "*🪙 加密貨幣指令*\n\n"
+        "`/pre_pump` 預備暴漲榜\n"
+        "`/pre_dump` 預備暴跌榜\n"
+        "`/squeeze` BB 壓縮蓄勢\n"
+        "`/confidence` 高信心榜\n"
+        "`/smartmoney` 🐋 聰明錢偵測\n"
+        "`/scan` 個人化掃描\n"
         "`/top10` 綜合 Top 10\n"
-        "`/pump` 看多榜\n"
-        "`/dump` 看空榜\n"
-        "`/detail BTC` 單幣詳細指標\n"
+        "`/pump` 看多榜  `/dump` 看空榜\n"
         "`/trade BTC` 💡 完整交易建議\n"
-        "`/structure BTC` OB+FVG 結構\n"
-        "`/status` Bot 運作狀態\n\n"
-        "*📡 TradingView*\n"
-        "`/sub_tv` 訂閱 TV Webhook 信號\n"
-        "`/unsub_tv` 取消 TV 訂閱\n"
-        "`/tv_status` Webhook 狀態與最近信號\n\n"
-        "*🔧 個人化篩選*\n"
-        "`/set_score 60` 最低總分\n"
-        "`/set_early 50` 最低早分\n"
-        "`/set_max_change 12` 最大已動 %\n"
-        "`/myfilters` 查看設定\n"
-        "`/reset` 重設\n\n"
-        "*🔔 訂閱*\n"
-        "`/sub_pre` 預警推送 (30 分鐘)\n"
-        "`/sub` 榜單推送 (1 小時)\n"
-        "`/unsub_all` 取消全部\n\n"
-        "*🇹🇼 台股指令*\n"
+        "`/detail BTC` 詳細指標\n"
+        "`/structure BTC` OB+FVG 結構分析"
+    ),
+    "tw": (
+        "*🇹🇼 台股指令*\n\n"
         "`/tw_scan` 預備暴漲榜\n"
         "`/tw_squeeze` BB 壓縮蓄勢\n"
         "`/tw_foreign` 外資連買榜\n"
+        "`/tw_joint` 🤝 法人聯手榜\n"
         "`/tw_top10` 台股 Top 10\n"
         "`/tw_trade 2330` 💡 完整交易建議\n"
         "`/tw_detail 2330` 詳細指標\n"
-        "`/tw_status` 台股 Bot 狀態\n"
-        "`/tw_sub` 訂閱台股早盤預警\n"
-        "`/tw_unsub` 取消台股訂閱\n\n"
-        "*🇺🇸 美股指令*\n"
-        "`/us_scan` 美股預備暴漲榜\n"
+        "`/tw_status` 台股 Bot 狀態"
+    ),
+    "us": (
+        "*🇺🇸 美股指令*\n\n"
+        "`/us_scan` 預備暴漲榜\n"
         "`/us_squeeze` BB 壓縮蓄勢\n"
-        "`/us_short` 軋空候選（高空頭比+轉強）\n"
-        "`/us_momentum` 動能榜（RSI+均線）\n"
+        "`/us_short` 軋空候選\n"
+        "`/us_momentum` 動能榜\n"
+        "`/us_rs` 📊 RS Rating 領導股\n"
+        "`/us_accum` 🏛️ 法人累積榜\n"
         "`/us_top10` 美股 Top 10\n"
         "`/us_trade AAPL` 💡 完整交易建議\n"
         "`/us_detail AAPL` 詳細指標\n"
-        "`/us_status` 美股 Bot 狀態\n"
-        "`/us_sub` 訂閱美股盤前預警（21:00 台灣時間）\n"
-        "`/us_unsub` 取消美股訂閱\n\n"
-        "⚠️ 不構成投資建議，風險自負"
+        "`/us_status` 美股 Bot 狀態"
+    ),
+    "general": (
+        "*🔍 通用查詢*\n\n"
+        "`/stock 2330` 個股查詢\n"
+        "（台股數字代號 / 加密幣種 / 美股英文代號，自動判斷）\n\n"
+        "`/status` Bot 運作狀態"
+    ),
+    "personal": (
+        "*🎛️ 個人化操作*\n\n"
+        "*篩選設定（加密）*\n"
+        "`/set_score 55` 最低總分門檻（預設 55）\n"
+        "`/set_early 40` 最低早分門檻（預設 40）\n"
+        "`/set_max_change 15` 最大已動 %（預設 15）\n"
+        "`/myfilters` 查看我的設定\n"
+        "`/reset` 重設為預設值\n\n"
+        "*⭐ 自選股 & 警報*\n"
+        "`/watch BTC` 加入自選股（台股/加密/美股皆可）\n"
+        "`/unwatch BTC` 移除自選股\n"
+        "`/mywatchlist` 我的自選股即時狀態\n"
+        "`/alert foreign 3` 外資連買 N 天警報\n"
+        "`/alert pre 70` 評分達 N 分警報"
+    ),
+    "position": (
+        "*📥 倉位追蹤*\n\n"
+        "`/enter BTC 95000 l 10`\n"
+        "進場記錄，參數：代號 價格 方向(l/s) 槓桿\n"
+        "Bot 自動計算 TP/SL，Trailing Stop 背景監控\n\n"
+        "`/close BTC 98000` 手動平倉\n"
+        "`/positions` 查看開倉 & 近期平倉紀錄\n"
+        "`/tpsl BTC 105000 88000` 自訂止盈止損"
+    ),
+    "sub": (
+        "*🔔 訂閱推播*\n\n"
+        "`/sub_pre` 加密預警（每 30 分鐘推送）\n"
+        "`/tw_sub` 台股早盤預警（每日 08:50）\n"
+        "`/us_sub` 美股盤前預警（每日 20:30）\n"
+        "`/unsub_all` 取消全部訂閱\n\n"
+        "*📡 TradingView Webhook*\n"
+        "`/sub_tv` 訂閱 TV 警報信號\n"
+        "`/unsub_tv` 取消 TV 訂閱\n"
+        "`/tv_status` Webhook 狀態"
+    ),
+}
+
+def _help_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🪙 加密貨幣", callback_data="help:crypto"),
+            InlineKeyboardButton("🇹🇼 台股",    callback_data="help:tw"),
+            InlineKeyboardButton("🇺🇸 美股",    callback_data="help:us"),
+        ],
+        [
+            InlineKeyboardButton("🔍 通用查詢",   callback_data="help:general"),
+            InlineKeyboardButton("🎛️ 個人化操作", callback_data="help:personal"),
+        ],
+        [
+            InlineKeyboardButton("📥 倉位追蹤",  callback_data="help:position"),
+            InlineKeyboardButton("🔔 訂閱推播",  callback_data="help:sub"),
+        ],
+        [
+            InlineKeyboardButton("📖 圖文使用說明", url="https://xiang14786.github.io/yaobi-bot/"),
+        ],
+    ])
+
+async def cmd_help(update, ctx):
+    await update.message.reply_text(
+        "*🤖 妖幣雷達 V2.3*\n選擇想查看的分類：",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_help_menu_keyboard()
     )
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📖 圖文使用說明", url="https://xiang14786.github.io/yaobi-bot/"),
+
+async def cb_help_section(update, ctx):
+    """處理 /help 分類按鈕點擊"""
+    query = update.callback_query
+    await query.answer()
+    key = query.data.split(":")[1]
+    text = _HELP_SECTIONS.get(key, "❌ 未知分類")
+    back_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("◀️ 返回選單", callback_data="help:menu")
     ]])
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=back_kb)
+
+async def cb_help_menu(update, ctx):
+    """返回 /help 主選單"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "*🤖 妖幣雷達 V2.3*\n選擇想查看的分類：",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_help_menu_keyboard()
+    )
 
 async def cmd_pre_pump(update, ctx):
     await update.message.reply_text("🔋 偵測蓄勢拉升中...")
@@ -1340,17 +1412,51 @@ async def cmd_reset(update, ctx):
 # ============================================================
 # 訂閱
 # ============================================================
+# ── 訂閱管理面板 ──────────────────────────────────────────
+def _sub_keyboard(cid: int) -> InlineKeyboardMarkup:
+    """產生訂閱面板 InlineKeyboard，已訂閱顯示 ✅"""
+    def _btn(label, channel, subscribers):
+        icon = "✅" if cid in subscribers else "☐"
+        return InlineKeyboardButton(f"{icon} {label}", callback_data=f"sub:toggle:{channel}")
+    return InlineKeyboardMarkup([
+        [
+            _btn("加密預警 (30分)", "pre_pump", PRE_PUMP_SUBSCRIBERS),
+            _btn("榜單推送 (1小時)", "general",  SUBSCRIBERS),
+        ],
+        [
+            _btn("台股早盤 (08:50)", "tw", TW_SUBSCRIBERS),
+            _btn("美股盤前 (20:30)", "us", US_SUBSCRIBERS),
+        ],
+        [InlineKeyboardButton("🔕 取消全部", callback_data="sub:unsub_all")],
+    ])
+
+def _sub_text(cid: int) -> str:
+    lines = ["*🔔 訂閱管理*", "點選按鈕切換訂閱狀態：", ""]
+    items = [
+        ("加密預警",  "每 30 分鐘推送預備暴漲/暴跌榜", cid in PRE_PUMP_SUBSCRIBERS),
+        ("榜單推送",  "每小時推送加密 Top 5",          cid in SUBSCRIBERS),
+        ("台股早盤",  "每日 08:50 推送台股開盤前預警",  cid in TW_SUBSCRIBERS),
+        ("美股盤前",  "每日 20:30 推送美股盤前機會",    cid in US_SUBSCRIBERS),
+    ]
+    for name, desc, active in items:
+        icon = "✅" if active else "☐"
+        lines.append(f"{icon} *{name}* — {desc}")
+    return "\n".join(lines)
+
+async def cmd_sub(update, ctx):
+    """顯示訂閱管理面板"""
+    cid = update.effective_chat.id
+    await update.message.reply_text(
+        _sub_text(cid), parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_sub_keyboard(cid)
+    )
+
+# 保留舊指令相容性
 async def cmd_sub_pre(update, ctx):
     cid = update.effective_chat.id
     PRE_PUMP_SUBSCRIBERS.add(cid)
     _db.save_subscriber("pre_pump", cid)
-    await update.message.reply_text("🔋 已訂閱預警！每 30 分鐘自動推送預備暴漲/暴跌榜")
-
-async def cmd_sub(update, ctx):
-    cid = update.effective_chat.id
-    SUBSCRIBERS.add(cid)
-    _db.save_subscriber("general", cid)
-    await update.message.reply_text("🔔 已訂閱！每小時推送 Top 5")
+    await update.message.reply_text("🔋 已訂閱！用 /sub 管理所有訂閱")
 
 async def cmd_unsub_all(update, ctx):
     cid = update.effective_chat.id
@@ -1362,7 +1468,49 @@ async def cmd_unsub_all(update, ctx):
     US_SUBSCRIBERS.discard(cid)
     for ch in ("general", "pre_pump", "tw", "us"):
         _db.delete_subscriber(ch, cid)
-    await update.message.reply_text("🔕 已取消全部訂閱（含 TradingView 警報 + 台股 + 美股預警）")
+    await update.message.reply_text("🔕 已取消全部訂閱")
+
+async def cb_sub_toggle(update, ctx):
+    """切換單項訂閱"""
+    query = update.callback_query
+    await query.answer()
+    cid = query.from_user.id
+    channel = query.data.split(":")[2]
+
+    _map = {
+        "pre_pump": PRE_PUMP_SUBSCRIBERS,
+        "general":  SUBSCRIBERS,
+        "tw":       TW_SUBSCRIBERS,
+        "us":       US_SUBSCRIBERS,
+    }
+    subs = _map.get(channel)
+    if subs is None:
+        return
+    if cid in subs:
+        subs.discard(cid)
+        _db.delete_subscriber(channel, cid)
+    else:
+        subs.add(cid)
+        _db.save_subscriber(channel, cid)
+
+    await query.edit_message_text(
+        _sub_text(cid), parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_sub_keyboard(cid)
+    )
+
+async def cb_sub_unsub_all(update, ctx):
+    """取消全部訂閱"""
+    query = update.callback_query
+    await query.answer("已取消全部訂閱")
+    cid = query.from_user.id
+    for subs in (SUBSCRIBERS, PRE_PUMP_SUBSCRIBERS, TW_SUBSCRIBERS, US_SUBSCRIBERS):
+        subs.discard(cid)
+    for ch in ("general", "pre_pump", "tw", "us"):
+        _db.delete_subscriber(ch, cid)
+    await query.edit_message_text(
+        _sub_text(cid), parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_sub_keyboard(cid)
+    )
 
 # ============================================================
 # 排程任務
@@ -2887,6 +3035,10 @@ def main():
         app.add_handler(CommandHandler(name, fn))
 
     # InlineKeyboard 回調
+    app.add_handler(CallbackQueryHandler(cb_sub_toggle,    pattern=r"^sub:toggle:"))
+    app.add_handler(CallbackQueryHandler(cb_sub_unsub_all, pattern=r"^sub:unsub_all$"))
+    app.add_handler(CallbackQueryHandler(cb_help_section,  pattern=r"^help:(?!menu)"))
+    app.add_handler(CallbackQueryHandler(cb_help_menu,     pattern=r"^help:menu$"))
     app.add_handler(CallbackQueryHandler(cb_enter,         pattern=r"^enter:"))
     app.add_handler(CallbackQueryHandler(cb_close_pick,    pattern=r"^close_pick:"))
     app.add_handler(CallbackQueryHandler(cb_atr_select,    pattern=r"^atr:"))
