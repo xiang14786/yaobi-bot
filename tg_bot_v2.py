@@ -125,6 +125,9 @@ WATCH_CONDITIONS: dict[int, dict] = {}
 # 紀錄已推送過的警報（避免重複）key = (user_id, symbol, alert_type)
 _SENT_ALERTS: set = set()
 
+# Phase 2 擴充：自訂 TP/SL 暫存（user_id → 待確認進場資訊）
+_PENDING_CUSTOM: dict[int, dict] = {}
+
 # ============================================================
 # 共用
 # ============================================================
@@ -1808,11 +1811,20 @@ async def cmd_enter(update, ctx):
         f"確認執行嗎？"
     )
     # callback_data: enter:ok:SYM:MKT:ENTRY:TP:SL:DIR:LEV
-    cb = f"enter:ok:{raw_sym}:{market}:{entry_price}:{tp}:{sl}:{direction}:{leverage}"
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ 依建議執行", callback_data=cb),
-        InlineKeyboardButton("❌ 取消",       callback_data="enter:cancel"),
-    ]])
+    cb_ok     = f"enter:ok:{raw_sym}:{market}:{entry_price}:{tp}:{sl}:{direction}:{leverage}"
+    cb_custom = f"enter:custom:{raw_sym}:{market}:{entry_price}:{direction}:{leverage}"
+    atr_str   = f"{atr:.6g}"
+    cb_atr    = f"enter:atr_menu:{raw_sym}:{market}:{entry_price}:{atr_str}:{direction}:{leverage}"
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ 依建議執行",  callback_data=cb_ok),
+            InlineKeyboardButton("❌ 取消",        callback_data="enter:cancel"),
+        ],
+        [
+            InlineKeyboardButton("✏️ 自訂 TP/SL", callback_data=cb_custom),
+            InlineKeyboardButton("📐 ATR 倍數",   callback_data=cb_atr),
+        ],
+    ])
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
 
@@ -1825,6 +1837,47 @@ async def cb_enter(update, ctx):
 
     if data[1] == "cancel":
         await q.edit_message_text("❌ 已取消")
+        return
+
+    if data[1] == "custom":
+        # enter:custom:SYM:MKT:ENTRY:DIR:LEV
+        _, _, symbol, market, entry_s, direction, lev_s = data
+        _PENDING_CUSTOM[uid] = {
+            "symbol": symbol, "market": market,
+            "entry": float(entry_s), "direction": direction, "leverage": int(lev_s),
+        }
+        await q.edit_message_text(
+            f"✏️ *自訂 TP/SL*\n\n"
+            f"請輸入：\n`/tpsl {symbol} <止盈價> <止損價>`\n\n"
+            f"例：`/tpsl {symbol} 85000 79000`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    if data[1] == "atr_menu":
+        # enter:atr_menu:SYM:MKT:ENTRY:ATR:DIR:LEV
+        _, _, symbol, market, entry_s, atr_s, direction, lev_s = data
+        entry = float(entry_s)
+        atr   = float(atr_s)
+        base  = f"{symbol}:{market}:{entry_s}:{atr_s}:{direction}:{lev_s}"
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("×1",   callback_data=f"atr:{base}:1.0"),
+            InlineKeyboardButton("×1.5", callback_data=f"atr:{base}:1.5"),
+            InlineKeyboardButton("×2",   callback_data=f"atr:{base}:2.0"),
+            InlineKeyboardButton("×3",   callback_data=f"atr:{base}:3.0"),
+        ]])
+        sl1 = entry - atr if direction == "long" else entry + atr
+        tp1 = entry + 2*atr if direction == "long" else entry - 2*atr
+        await q.edit_message_text(
+            f"📐 *ATR 倍數止損*\n\n"
+            f"ATR = `{atr:.4g}`\n"
+            f"SL = 進場 ± N×ATR\n"
+            f"TP = 進場 ± 2N×ATR  (1:2 風報比)\n\n"
+            f"×1 範例：TP `{tp1:.4f}`  SL `{sl1:.4f}`\n\n"
+            f"選擇 N 倍數：",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard,
+        )
         return
 
     # enter:ok:SYM:MKT:ENTRY:TP:SL:DIR:LEV
@@ -1849,6 +1902,144 @@ async def cb_enter(update, ctx):
     )
 
 
+async def cb_atr_select(update, ctx):
+    """處理 ATR 倍數選擇：atr:SYM:MKT:ENTRY:ATR:DIR:LEV:MULT"""
+    q = update.callback_query
+    await q.answer()
+    parts = q.data.split(":")
+    _, symbol, market, entry_s, atr_s, direction, lev_s, mult_s = parts
+    entry    = float(entry_s)
+    atr      = float(atr_s)
+    leverage = int(lev_s)
+    mult     = float(mult_s)
+
+    if direction == "long":
+        sl = round(entry - mult * atr, 4)
+        tp = round(entry + 2 * mult * atr, 4)
+    else:
+        sl = round(entry + mult * atr, 4)
+        tp = round(entry - 2 * mult * atr, 4)
+
+    tp_pct  = abs(tp - entry) / entry * 100
+    sl_pct  = abs(sl - entry) / entry * 100
+    rr      = tp_pct / sl_pct if sl_pct > 0 else 0
+    tp_sign = "+" if direction == "long" else "-"
+    sl_sign = "-" if direction == "long" else "+"
+    lev_note = f"\n槓桿：`{leverage}x`" if leverage > 1 else ""
+
+    cb_ok = f"enter:ok:{symbol}:{market}:{entry_s}:{tp}:{sl}:{direction}:{lev_s}"
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ 確認開倉", callback_data=cb_ok),
+        InlineKeyboardButton("❌ 取消",     callback_data="enter:cancel"),
+    ]])
+    market_flag = {"tw": "🇹🇼", "us": "🇺🇸", "crypto": "🪙"}.get(market, "📊")
+    dir_label   = "📈 多" if direction == "long" else "📉 空"
+    await q.edit_message_text(
+        f"{market_flag} *{symbol}*  {dir_label}  ATR×{mult_s}\n\n"
+        f"進場：`{entry:.4f}`\n"
+        f"TP：`{tp:.4f}` ({tp_sign}{tp_pct:.1f}%)  [2N×ATR]\n"
+        f"SL：`{sl:.4f}` ({sl_sign}{sl_pct:.1f}%)  [{mult_s}×ATR]\n"
+        f"風報比：`{rr:.1f}:1`{lev_note}\n\n"
+        f"確認開倉？",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=keyboard,
+    )
+
+
+async def cmd_tpsl(update, ctx):
+    """/tpsl BTC 85000 79000 — 自訂止盈止損"""
+    uid = update.effective_user.id
+    if len(ctx.args or []) < 3:
+        await update.message.reply_text(
+            "用法：`/tpsl BTC 85000 79000`\n"
+            "先用 `/enter BTC 進場價` 並點「✏️ 自訂 TP/SL」再輸入此指令",
+            parse_mode=ParseMode.MARKDOWN)
+        return
+
+    symbol = ctx.args[0].upper().replace("USDT", "")
+    try:
+        tp_input = float(ctx.args[1].replace(",", ""))
+        sl_input = float(ctx.args[2].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("❌ 價格格式錯誤")
+        return
+
+    pending = _PENDING_CUSTOM.pop(uid, None)
+    if not pending or pending["symbol"] != symbol:
+        await update.message.reply_text(
+            f"❌ 找不到 `{symbol}` 的待確認進場\n"
+            f"請先用 `/enter {symbol} <進場價>` 並點選「✏️ 自訂 TP/SL」",
+            parse_mode=ParseMode.MARKDOWN)
+        return
+
+    entry     = pending["entry"]
+    market    = pending["market"]
+    direction = pending["direction"]
+    leverage  = pending["leverage"]
+
+    tp_pct  = abs(tp_input - entry) / entry * 100
+    sl_pct  = abs(sl_input - entry) / entry * 100
+    rr      = tp_pct / sl_pct if sl_pct > 0 else 0
+    tp_sign = "+" if direction == "long" else "-"
+    sl_sign = "-" if direction == "long" else "+"
+
+    pos_id      = _db.open_position(uid, symbol, market, entry, tp_input, sl_input, direction, leverage)
+    market_flag = {"tw": "🇹🇼", "us": "🇺🇸", "crypto": "🪙"}.get(market, "📊")
+    dir_label   = "📈 做多" if direction == "long" else "📉 做空"
+    lev_label   = f" {leverage}x" if leverage > 1 else " 現貨"
+    await update.message.reply_text(
+        f"✅ 倉位已開啟 #{pos_id}\n\n"
+        f"{market_flag} *{symbol}*  {dir_label}{lev_label}\n"
+        f"進場：`{entry:.4f}`\n"
+        f"TP：`{tp_input:.4f}` ({tp_sign}{tp_pct:.1f}%)\n"
+        f"SL：`{sl_input:.4f}` ({sl_sign}{sl_pct:.1f}%)\n"
+        f"風報比：`{rr:.1f}:1`\n\n"
+        f"背景每 30 分鐘自動追蹤，觸及 TP/SL 時通知你\n"
+        f"用 `/close {symbol}` 手動平倉",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def _do_close(bot, uid: int, pos: dict, close_price: float):
+    """實際執行平倉並回傳格式化訊息"""
+    symbol    = pos["symbol"]
+    direction = pos.get("direction", "long")
+    leverage  = pos.get("leverage", 1)
+    _db.close_position(pos["id"], close_price, pos["entry_price"], direction)
+    if direction == "short":
+        pnl = (pos["entry_price"] - close_price) / pos["entry_price"] * 100
+    else:
+        pnl = (close_price - pos["entry_price"]) / pos["entry_price"] * 100
+    pnl_lev  = pnl * leverage
+    emoji    = "🟢" if pnl >= 0 else "🔴"
+    dir_str  = "📈 多" if direction == "long" else "📉 空"
+    lev_str  = f" {leverage}x" if leverage > 1 else " 現貨"
+    lev_note = f"\n帶槓損益：`{pnl_lev:+.2f}%`" if leverage > 1 else ""
+    return (
+        f"{emoji} *{symbol}* 平倉完成  {dir_str}{lev_str}\n\n"
+        f"進場：`{pos['entry_price']:.4f}`\n"
+        f"平倉：`{close_price:.4f}`\n"
+        f"損益：`{pnl:+.2f}%`{lev_note}"
+    )
+
+
+async def _get_current_price(symbol: str, market: str) -> float | None:
+    """從快取取得現價"""
+    if market == "crypto":
+        coins = await get_scan()
+        mc = next((c for c in coins if c.base == symbol), None)
+        return mc.last_price if mc else None
+    elif market == "tw":
+        stocks = await get_tw_scan()
+        m = next((s for s in stocks if s.stock_id == symbol), None)
+        return m.close if m else None
+    elif market == "us":
+        us = await get_us_scan()
+        mu = next((s for s in us if s.ticker == symbol), None)
+        return mu.close if mu else None
+    return None
+
+
 async def cmd_close(update, ctx):
     """/close BTC [平倉價格（可選）]"""
     uid = update.effective_user.id
@@ -1857,48 +2048,76 @@ async def cmd_close(update, ctx):
                                         parse_mode=ParseMode.MARKDOWN)
         return
     symbol = ctx.args[0].strip().upper().replace("USDT", "")
-    pos    = _db.get_position_by_symbol(uid, symbol)
-    if not pos:
+
+    # 解析平倉價格（可選）
+    close_price_input: float | None = None
+    if len(ctx.args) >= 2:
+        try:
+            close_price_input = float(ctx.args[1].replace(",", ""))
+        except ValueError:
+            await update.message.reply_text("❌ 平倉價格格式錯誤")
+            return
+
+    positions = _db.get_positions_by_symbol(uid, symbol)
+    if not positions:
         await update.message.reply_text(f"❌ 找不到 `{symbol}` 的開倉紀錄",
                                         parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 取得平倉價格（手動輸入或從快取取現價）
-    if len(ctx.args) >= 2:
-        try:
-            close_price = float(ctx.args[1].replace(",", ""))
-        except ValueError:
-            await update.message.reply_text("❌ 平倉價格格式錯誤")
-            return
-    else:
-        # 嘗試從快取取現價
-        close_price = pos["entry_price"]   # fallback
-        if pos["market"] == "crypto":
-            coins = await get_scan()
-            mc = next((c for c in coins if c.base == symbol), None)
-            if mc:
-                close_price = mc.last_price
-        elif pos["market"] == "tw":
-            stocks = await get_tw_scan()
-            m = next((s for s in stocks if s.stock_id == symbol), None)
-            if m:
-                close_price = m.close
-        elif pos["market"] == "us":
-            us = await get_us_scan()
-            mu = next((s for s in us if s.ticker == symbol), None)
-            if mu:
-                close_price = mu.close
+    # 若只有一筆，直接平倉
+    if len(positions) == 1:
+        pos = positions[0]
+        close_price = close_price_input or await _get_current_price(symbol, pos["market"]) or pos["entry_price"]
+        msg = await _do_close(ctx.bot, uid, pos, close_price)
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+        return
 
-    _db.close_position(pos["id"], close_price, pos["entry_price"])
-    pnl = (close_price - pos["entry_price"]) / pos["entry_price"] * 100
-    emoji = "🟢" if pnl >= 0 else "🔴"
+    # 多筆同標的 → 顯示按鈕讓用戶選擇
+    price_arg = str(close_price_input) if close_price_input else "auto"
+    buttons = []
+    for pos in positions:
+        dir_str = "多" if pos.get("direction", "long") == "long" else "空"
+        lev     = pos.get("leverage", 1)
+        lev_str = f"{lev}x" if lev > 1 else "現貨"
+        label   = f"{'📈' if dir_str=='多' else '📉'} {dir_str} {lev_str} | 進場 {pos['entry_price']:.4f}"
+        buttons.append([InlineKeyboardButton(label,
+                         callback_data=f"close_pick:{pos['id']}:{price_arg}")])
+    buttons.append([InlineKeyboardButton("❌ 取消", callback_data="close_pick:cancel:0")])
+    keyboard = InlineKeyboardMarkup(buttons)
     await update.message.reply_text(
-        f"{emoji} *{symbol}* 平倉完成\n\n"
-        f"進場：`{pos['entry_price']:.4f}`\n"
-        f"平倉：`{close_price:.4f}`\n"
-        f"損益：`{pnl:+.2f}%`",
+        f"*{symbol}* 有 {len(positions)} 筆開倉，選擇要平的那筆：",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=keyboard,
     )
+
+
+async def cb_close_pick(update, ctx):
+    """處理多倉選擇平倉的回調：close_pick:POS_ID:PRICE_OR_auto"""
+    q = update.callback_query
+    await q.answer()
+    parts = q.data.split(":")
+    if parts[1] == "cancel":
+        await q.edit_message_text("❌ 已取消")
+        return
+
+    pos_id     = int(parts[1])
+    price_arg  = parts[2]
+    uid        = q.from_user.id
+
+    # 取得該倉位
+    all_pos = _db.get_open_positions(uid)
+    pos     = next((p for p in all_pos if p["id"] == pos_id), None)
+    if not pos:
+        await q.edit_message_text("❌ 找不到此倉位（可能已平倉）")
+        return
+
+    if price_arg == "auto":
+        close_price = await _get_current_price(pos["symbol"], pos["market"]) or pos["entry_price"]
+    else:
+        close_price = float(price_arg)
+
+    msg = await _do_close(ctx.bot, uid, pos, close_price)
+    await q.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 
 async def cmd_positions(update, ctx):
@@ -1951,9 +2170,57 @@ async def cmd_positions(update, ctx):
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 
+def _check_reversal_signal(sym: str, market: str, direction: str,
+                            coins, tw_stocks, us_stocks) -> tuple[bool, str]:
+    """檢查是否有反轉訊號，回傳 (has_reversal, reason)"""
+    if market == "crypto":
+        mc = next((c for c in coins if c.base == sym), None)
+        if not mc:
+            return False, ""
+        rsi = getattr(mc, "rsi", 50) or 50
+        if direction == "long":
+            if rsi > 75:
+                return True, f"RSI 過熱 {rsi:.0f}"
+            if mc.total_score < 35:
+                return True, f"動能轉弱（總分 {mc.total_score:.0f}）"
+        else:
+            if rsi < 25:
+                return True, f"RSI 超賣 {rsi:.0f}"
+            if mc.total_score < 35:
+                return True, f"動能轉弱（總分 {mc.total_score:.0f}）"
+    elif market == "tw":
+        m = next((s for s in tw_stocks if s.stock_id == sym), None)
+        if not m:
+            return False, ""
+        rsi = getattr(m, "rsi", 50) or 50
+        if direction == "long":
+            if rsi > 75:
+                return True, f"RSI 過熱 {rsi:.0f}"
+            if getattr(m, "foreign_net", 0) < 0:
+                return True, "外資轉賣"
+        else:
+            if rsi < 25:
+                return True, f"RSI 超賣 {rsi:.0f}"
+    elif market == "us":
+        mu = next((s for s in us_stocks if s.ticker == sym), None)
+        if not mu:
+            return False, ""
+        if direction == "long":
+            if mu.rsi > 75:
+                return True, f"RSI 過熱 {mu.rsi:.0f}"
+            if mu.change_pct < -2:
+                return True, f"今日下跌 {mu.change_pct:.1f}%"
+        else:
+            if mu.rsi < 25:
+                return True, f"RSI 超賣 {mu.rsi:.0f}"
+            if mu.change_pct > 2:
+                return True, f"今日上漲 {mu.change_pct:.1f}%"
+    return False, ""
+
+
 # ── 背景倉位監控（每 30 分鐘）──
 async def background_position_monitor(ctx):
-    """檢查所有開倉是否觸及 TP/SL，並更新 Trailing Stop"""
+    """檢查所有開倉是否觸及 TP/SL，並更新 Trailing Stop / Trailing TP"""
     positions = _db.get_open_positions()
     if not positions:
         return
@@ -1963,12 +2230,13 @@ async def background_position_monitor(ctx):
     us_stocks = await get_us_scan()
 
     for p in positions:
-        sym   = p["symbol"]
-        entry = p["entry_price"]
-        tp    = p["tp_price"]
-        sl    = p["sl_price"]
-        high  = p["highest_price"] or entry
-        uid   = p["user_id"]
+        sym       = p["symbol"]
+        entry     = p["entry_price"]
+        tp        = p["tp_price"]
+        sl        = p["sl_price"]
+        high      = p["highest_price"] or entry
+        uid       = p["user_id"]
+        direction = p.get("direction", "long")
 
         # 取得現價
         cur = None
@@ -1985,35 +2253,89 @@ async def background_position_monitor(ctx):
         if cur is None:
             continue
 
-        # Trailing Stop：若現價創新高，SL 跟隨移動（保留 entry→high 漲幅的 50%）
-        if cur > high:
+        # ── Trailing Stop（多單：現價創新高 SL 上移；空單：現價創新低 SL 下移）
+        if direction == "long" and cur > high:
             _db.update_highest(p["id"], cur)
             trail_sl = entry + (cur - entry) * 0.5
             if trail_sl > sl:
                 with _db._conn() as c:
                     c.execute("UPDATE positions SET sl_price=? WHERE id=?", (trail_sl, p["id"]))
                 sl = trail_sl
+        elif direction == "short" and cur < high:
+            _db.update_highest(p["id"], cur)
+            trail_sl = entry - (entry - cur) * 0.5
+            if trail_sl < sl:
+                with _db._conn() as c:
+                    c.execute("UPDATE positions SET sl_price=? WHERE id=?", (trail_sl, p["id"]))
+                sl = trail_sl
 
-        # TP 觸及
-        if cur >= tp:
-            _db.close_position(p["id"], cur, entry)
-            pnl = (cur - entry) / entry * 100
-            try:
-                await ctx.bot.send_message(uid,
-                    f"🎯 *{sym}* 觸及止盈！\n\n"
-                    f"TP `{tp:.4f}` 已達成\n現價 `{cur:.4f}`\n損益 `{pnl:+.2f}%` 🟢",
-                    parse_mode=ParseMode.MARKDOWN)
-            except Exception:
-                pass
+        # ── 方向感知的 TP/SL 觸發判斷
+        tp_hit = (cur >= tp) if direction == "long" else (cur <= tp)
+        sl_hit = (cur <= sl) if direction == "long" else (cur >= sl)
 
-        # SL 觸及
-        elif cur <= sl:
-            _db.close_position(p["id"], cur, entry)
-            pnl = (cur - entry) / entry * 100
+        if tp_hit:
+            has_reversal, reason = _check_reversal_signal(
+                sym, p["market"], direction, coins, tw_stocks, us_stocks)
+
+            if has_reversal:
+                # 有反轉訊號 → 自動平倉
+                _db.close_position(p["id"], cur, entry, direction)
+                pnl     = (cur - entry) / entry * 100 * (1 if direction == "long" else -1)
+                pnl_lev = pnl * p.get("leverage", 1)
+                lev_note = f"\n帶槓損益：`{pnl_lev:+.2f}%`" if p.get("leverage", 1) > 1 else ""
+                try:
+                    await ctx.bot.send_message(uid,
+                        f"🎯 *{sym}* 觸及止盈！\n\n"
+                        f"TP `{tp:.4f}` 已達成\n現價 `{cur:.4f}`\n損益 `{pnl:+.2f}%` 🟢{lev_note}\n\n"
+                        f"⚠️ *偵測到反轉訊號*：{reason}\n已自動平倉",
+                        parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    pass
+            else:
+                # 無反轉訊號 → 追蹤止盈：自動上調 TP/SL
+                atr_est = abs(tp - entry) * 0.4
+                if p["market"] == "crypto":
+                    mc = next((c for c in coins if c.base == sym), None)
+                    if mc:
+                        atr_est = getattr(mc, "atr", atr_est) or atr_est
+                elif p["market"] == "us":
+                    mu = next((s for s in us_stocks if s.ticker == sym), None)
+                    if mu:
+                        atr_est = getattr(mu, "atr", atr_est) or atr_est
+
+                if direction == "long":
+                    new_tp = round(cur + atr_est, 4)
+                    new_sl = round(cur - atr_est * 0.5, 4)
+                else:
+                    new_tp = round(cur - atr_est, 4)
+                    new_sl = round(cur + atr_est * 0.5, 4)
+
+                with _db._conn() as c:
+                    c.execute("UPDATE positions SET tp_price=?, sl_price=? WHERE id=?",
+                              (new_tp, new_sl, p["id"]))
+
+                pnl = (cur - entry) / entry * 100 * (1 if direction == "long" else -1)
+                try:
+                    await ctx.bot.send_message(uid,
+                        f"📈 *{sym}* 觸及止盈！追蹤中\n\n"
+                        f"現價 `{cur:.4f}`  浮盈 `{pnl:+.2f}%` 🟢\n"
+                        f"無明顯反轉訊號，TP/SL 已自動上調：\n"
+                        f"新 TP：`{new_tp:.4f}`\n"
+                        f"新 SL（保底）：`{new_sl:.4f}`\n\n"
+                        f"用 `/close {sym}` 手動鎖定獲利",
+                        parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    pass
+
+        elif sl_hit:
+            _db.close_position(p["id"], cur, entry, direction)
+            pnl     = (cur - entry) / entry * 100 * (1 if direction == "long" else -1)
+            pnl_lev = pnl * p.get("leverage", 1)
+            lev_note = f"\n帶槓損益：`{pnl_lev:+.2f}%`" if p.get("leverage", 1) > 1 else ""
             try:
                 await ctx.bot.send_message(uid,
                     f"🛑 *{sym}* 觸及止損！\n\n"
-                    f"SL `{sl:.4f}` 已觸及\n現價 `{cur:.4f}`\n損益 `{pnl:+.2f}%` 🔴",
+                    f"SL `{sl:.4f}` 已觸及\n現價 `{cur:.4f}`\n損益 `{pnl:+.2f}%` 🔴{lev_note}",
                     parse_mode=ParseMode.MARKDOWN)
             except Exception:
                 pass
@@ -2299,6 +2621,7 @@ async def post_init(app):
         BotCommand("enter",          "📥 進場記錄 /enter BTC 81000"),
         BotCommand("close",          "📤 平倉 /close BTC"),
         BotCommand("positions",      "📊 我的倉位"),
+        BotCommand("tpsl",           "✏️ 自訂止盈止損 /tpsl BTC 85000 79000"),
         # 設定
         BotCommand("set_score",      "設總分門檻"),
         BotCommand("set_early",      "設早分門檻"),
@@ -2394,12 +2717,15 @@ def main():
         ("enter",          cmd_enter),
         ("close",          cmd_close),
         ("positions",      cmd_positions),
+        ("tpsl",           cmd_tpsl),
     ]
     for name, fn in cmds:
         app.add_handler(CommandHandler(name, fn))
 
     # InlineKeyboard 回調
     app.add_handler(CallbackQueryHandler(cb_enter,         pattern=r"^enter:"))
+    app.add_handler(CallbackQueryHandler(cb_close_pick,    pattern=r"^close_pick:"))
+    app.add_handler(CallbackQueryHandler(cb_atr_select,    pattern=r"^atr:"))
     app.add_handler(CallbackQueryHandler(cb_market_select, pattern=r"^mktsel:"))
 
     # 加密版排程

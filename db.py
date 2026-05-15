@@ -119,9 +119,13 @@ def open_position(user_id: int, symbol: str, market: str,
         return cur.lastrowid
 
 
-def close_position(pos_id: int, close_price: float, entry_price: float):
-    now    = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    pnl    = (close_price - entry_price) / entry_price * 100
+def close_position(pos_id: int, close_price: float, entry_price: float,
+                   direction: str = "long"):
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    if direction == "short":
+        pnl = (entry_price - close_price) / entry_price * 100
+    else:
+        pnl = (close_price - entry_price) / entry_price * 100
     with _conn() as c:
         c.execute("""
             UPDATE positions
@@ -153,6 +157,15 @@ def get_position_by_symbol(user_id: int, symbol: str) -> dict | None:
             "SELECT * FROM positions WHERE user_id=? AND symbol=? AND status='open'",
             (user_id, symbol)).fetchone()
     return dict(row) if row else None
+
+
+def get_positions_by_symbol(user_id: int, symbol: str) -> list[dict]:
+    """取得同一標的所有開倉（可能多筆）"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM positions WHERE user_id=? AND symbol=? AND status='open'",
+            (user_id, symbol)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_closed_positions(user_id: int, limit: int = 10) -> list[dict]:
