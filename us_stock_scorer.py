@@ -71,6 +71,9 @@ class UsStockMetrics:
     ma20:         float = 0.0
     ma50:         float = 0.0
     dist_52w_high_pct: float = 0.0  # 距 52 週高點 %
+    rs_rating:    float = 0.0   # RS Rating 0~99（相對強度）
+    rs_score:     float = 0.0   # RS 評分維度分數（0~15）
+    accum_score:  float = 0.0   # 法人累積分（量比+法人持股）
 
 
 # ──────────────────────────────────────────────
@@ -379,13 +382,18 @@ def score_us_stock(d: UsStockData) -> UsStockMetrics:
     m.short_squeeze_score, t5 = score_short_squeeze(d)
     m.institution_score,   t6 = score_institution(d)
     m.ob_fvg_score,        t7 = score_ob_fvg(d)
+    # RS Rating（先算 rs_rating 再評分）
+    m.rs_rating            = calc_rs_rating(d.closes)
+    m.rs_score,            t8 = score_rs_rating(m)
+    m.accum_score,         t9 = score_accum_distribution(d)
 
-    for t in [t1, t2, t3, t4, t5, t6, t7]:
+    for t in [t1, t2, t3, t4, t5, t6, t7, t8, t9]:
         all_triggers.extend(t)
 
     m.total_score = (
         m.bb_score + m.vol_score + m.momentum_score + m.atr_score +
-        m.short_squeeze_score + m.institution_score + m.ob_fvg_score
+        m.short_squeeze_score + m.institution_score + m.ob_fvg_score +
+        m.rs_score + m.accum_score
     )
     m.early_score = m.bb_score + m.vol_score + m.atr_score
     m.confidence  = min(m.total_score / 100, 1.0)
@@ -423,6 +431,9 @@ def score_us_stock(d: UsStockData) -> UsStockMetrics:
     else:          m.position_pct = 20
 
     # 標籤
+    if m.rs_rating >= 90: m.tags.append("🏆 RS90+")
+    elif m.rs_rating >= 80: m.tags.append("💪 RS強勢")
+    if m.accum_score >= 10: m.tags.append("🏦 法人累積")
     if m.total_score >= 65: m.tags.append("💎 強訊號")
     if m.short_float >= 0.20: m.tags.append("🎯 軋空候選")
     if m.volume_ratio >= 2: m.tags.append("🔥 爆量")
@@ -431,6 +442,86 @@ def score_us_stock(d: UsStockData) -> UsStockMetrics:
     m.triggers = all_triggers[:5]
     return m
 
+
+
+# ──────────────────────────────────────────────
+#  RS Rating（相對強度 0~99）
+# ──────────────────────────────────────────────
+def calc_rs_rating(closes: list[float], spy_closes: list[float] | None = None) -> float:
+    """
+    IBD 風格 RS Rating：比較個股近 12 個月表現 vs 市場（SPY）
+    若無 SPY 資料，用 0 報酬作為基準
+    回傳 0~99 分
+    """
+    if len(closes) < 60:
+        return 0.0
+    # 近 12 個月報酬（用最多 252 根）
+    lookback = min(len(closes) - 1, 252)
+    stock_ret = (closes[-1] - closes[-lookback]) / closes[-lookback] if closes[-lookback] > 0 else 0
+    # 若有 SPY 資料比較
+    spy_ret = 0.0
+    if spy_closes and len(spy_closes) >= lookback:
+        spy_ret = (spy_closes[-1] - spy_closes[-lookback]) / spy_closes[-lookback] if spy_closes[-lookback] > 0 else 0
+    # 超額報酬
+    excess = stock_ret - spy_ret
+    # 轉換成 0~99 分（超額報酬 ±50% 對應 0~99）
+    rs = 50 + excess * 100
+    return max(0.0, min(99.0, rs))
+
+
+def score_rs_rating(m: "UsStockMetrics") -> tuple[float, list[str]]:
+    """RS Rating → 評分（0~15 分）"""
+    rs = m.rs_rating
+    triggers = []
+    if rs >= 90:
+        triggers.append(f"🏆 RS={rs:.0f} 市場頂尖強勢股")
+        return 15.0, triggers
+    elif rs >= 80:
+        triggers.append(f"💪 RS={rs:.0f} 相對強勢")
+        return 11.0, triggers
+    elif rs >= 70:
+        triggers.append(f"📈 RS={rs:.0f} 強於大盤")
+        return 7.0, triggers
+    elif rs >= 50:
+        return 3.0, triggers
+    else:
+        return 0.0, triggers
+
+
+def score_accum_distribution(d: "UsStockData") -> tuple[float, list[str]]:
+    """
+    法人累積/派發評分（0~15 分）
+    原理：上漲日成交量 vs 下跌日成交量之比（A/D 比）
+    A/D > 1.3：法人在累積（買進）
+    A/D < 0.7：法人在派發（賣出）
+    """
+    if len(d.closes) < 20 or len(d.volumes) < 20:
+        return 0.0, []
+    triggers = []
+    n = min(20, len(d.closes))
+    up_vol = sum(d.volumes[i] for i in range(-n, 0) if d.closes[i] > d.closes[i-1])
+    dn_vol = sum(d.volumes[i] for i in range(-n, 0) if d.closes[i] <= d.closes[i-1])
+    if dn_vol == 0:
+        ad_ratio = 3.0
+    else:
+        ad_ratio = up_vol / dn_vol
+    score = 0.0
+    if ad_ratio >= 1.5:
+        score = 15.0
+        triggers.append(f"🏦 法人強力累積 (A/D={ad_ratio:.2f})")
+    elif ad_ratio >= 1.2:
+        score = 10.0
+        triggers.append(f"📊 法人持續買入 (A/D={ad_ratio:.2f})")
+    elif ad_ratio >= 1.0:
+        score = 5.0
+    elif ad_ratio < 0.7:
+        triggers.append(f"⚠️ 法人派發賣出 (A/D={ad_ratio:.2f})")
+    # 高法人持股加分
+    if d.inst_pct >= 0.60:
+        score = min(score + 3, 15.0)
+        if not any("法人" in t for t in triggers):
+            triggers.append(f"🏛️ 法人持股 {d.inst_pct:.0%}")
+    return score, triggers
 
 # ──────────────────────────────────────────────
 #  篩選函式
@@ -485,3 +576,13 @@ async def fetch_all_us_metrics(
     metrics.sort(key=lambda x: x.total_score, reverse=True)
     log.info(f"[US] 評分完成，{len(metrics)} 支")
     return metrics
+
+def find_us_rs_leaders(metrics: list[UsStockMetrics], top_n=10) -> list[UsStockMetrics]:
+    """RS Rating 領導股（RS >= 80 + 技術評分高）"""
+    r = [m for m in metrics if m.rs_rating >= 80 and m.total_score >= 40]
+    return sorted(r, key=lambda x: x.rs_rating + x.total_score * 0.3, reverse=True)[:top_n]
+
+def find_us_accum(metrics: list[UsStockMetrics], top_n=10) -> list[UsStockMetrics]:
+    """法人累積中的股票（A/D 強 + 法人高持股）"""
+    r = [m for m in metrics if m.accum_score >= 8 and m.total_score >= 35]
+    return sorted(r, key=lambda x: x.accum_score + x.rs_rating * 0.1, reverse=True)[:top_n]

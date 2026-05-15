@@ -36,6 +36,8 @@ from yaobi_scorer_v2 import (
     fetch_all_metrics_v2, apply_filters_v2,
     find_pre_pump, find_pre_dump, find_squeeze,
     DEFAULT_FILTERS_V2, CoinMetricsV2,
+
+    find_smart_money,
 )
 
 # ── V2.1: TradingView 整合模組 ─────────────────────────────
@@ -56,6 +58,7 @@ from tw_stock_scorer import (
     find_tw_pre_pump,
     find_tw_squeeze,
     find_tw_institutional_buy,
+    find_tw_joint_buy,
     DEFAULT_TW_FILTERS,
 )
 # ── V2.3: 美股模組 ─────────────────────────────────────────
@@ -65,6 +68,8 @@ from us_stock_scorer import (
     find_us_squeeze,
     find_us_short_squeeze,
     find_us_momentum,
+    find_us_rs_leaders,
+    find_us_accum,
     apply_us_filters,
     DEFAULT_US_FILTERS,
 )
@@ -832,6 +837,75 @@ async def cmd_tw_unsub(update, ctx):
     TW_SUBSCRIBERS.discard(update.effective_chat.id)
     await update.message.reply_text("🔕 已取消台股訂閱")
 
+
+# ── 台股法人聯手榜 ──────────────────────────────────────
+async def cmd_tw_joint(update, ctx):
+    """法人聯手榜：外資+投信同日買超"""
+    stocks = await get_tw_scan()
+    joint  = find_tw_joint_buy(stocks)
+    if not joint:
+        await update.message.reply_text("📭 今日無外資+投信同時買超的標的")
+        return
+    text = fmt_tw_list(joint[:8], f"🤝 台股法人聯手榜 ({len(joint)} 支)")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                    disable_web_page_preview=True)
+
+# ── 美股 RS Rating 榜 ──────────────────────────────────
+async def cmd_us_rs(update, ctx):
+    """RS Rating 領導股榜單"""
+    stocks = await get_us_scan()
+    rs     = find_us_rs_leaders(stocks)
+    if not rs:
+        await update.message.reply_text("📭 暫無 RS80+ 的領導股")
+        return
+    lines = ["🏆 *美股 RS Rating 領導股榜*\n"]
+    for i, m in enumerate(rs[:8], 1):
+        bar = "🟢" if m.rs_rating >= 90 else "🔵"
+        lines.append(
+            bar + " *" + m.ticker + "* `RS=" + f"{m.rs_rating:.0f}" + "` 總分`" + f"{m.total_score:.0f}" + "`\n"
+            "  " + m.direction + f"  52W高`{m.dist_52w_high_pct:+.1f}%`  法人`{m.inst_pct:.0%}`\n"
+        )
+    lines.append("_RS Rating = 近 12 個月相對大盤強度_")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_us_accum(update, ctx):
+    """法人累積榜（A/D 比強）"""
+    stocks = await get_us_scan()
+    ac     = find_us_accum(stocks)
+    if not ac:
+        await update.message.reply_text("📭 暫無法人強力累積標的")
+        return
+    lines = ["🏦 *美股法人累積榜*\n"]
+    for i, m in enumerate(ac[:8], 1):
+        lines.append(
+            f"*{i}. {m.ticker}* 累積分`{m.accum_score:.0f}` RS=`{m.rs_rating:.0f}`\n"
+            f"  {m.direction}  法人持股`{m.inst_pct:.0%}`\n"
+        )
+    lines.append("_A/D = 上漲日成交量 / 下跌日成交量，>1.2 = 法人在買_")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+# ── 加密聰明錢 ──────────────────────────────────────────
+async def cmd_smartmoney(update, ctx):
+    """頂級交易者倉位異常 = 聰明錢信號"""
+    coins = CRYPTO_CACHE.get("data", [])
+    if not coins:
+        await update.message.reply_text("⏳ 快取尚未建立，請稍候 30 秒後再試")
+        return
+    smart = find_smart_money(coins)
+    if not smart:
+        await update.message.reply_text("📭 目前無明顯聰明錢信號")
+        return
+    lines = ["🐋 *聰明錢偵測榜*（頂級交易者倉位異常）\n"]
+    for i, c in enumerate(smart[:6], 1):
+        reason = getattr(c, "_smart_reason", "")
+        lines.append(
+            f"*{i}. {c.base}*  `${c.last_price:,.4g}`  {c.price_change_pct:+.1f}%\n"
+            f"  {reason}\n"
+            f"  FR=`{c.funding_rate*100:.3f}%`  頂級多空=`{c.top_trader_ls_ratio:.2f}`\n"
+        )
+    lines.append("_頂級交易者 = Binance 前 20% 資金量帳戶_")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
 # ── 台股排程推送 ──────────────────────────────────────────
 async def push_tw_morning(ctx):
     """每日 08:50 推送台股開盤前預警"""
@@ -842,11 +916,17 @@ async def push_tw_morning(ctx):
     except Exception as e:
         log.error(f"台股早盤推送失敗: {e}")
         return
-    pre  = find_tw_pre_pump(stocks)[:3]
-    fore = find_tw_institutional_buy(stocks)[:3]
-    if not pre and not fore:
+    pre   = find_tw_pre_pump(stocks)[:3]
+    fore  = find_tw_institutional_buy(stocks)[:3]
+    joint = find_tw_joint_buy(stocks)[:3]
+    if not pre and not fore and not joint:
         return
     parts = [f"🇹🇼 *台股開盤前預警*  _{datetime.now(TW_TZ):%m/%d %H:%M}_\n"]
+    if joint:
+        parts.append("*🤝 法人聯手買超*")
+        for i, m in enumerate(joint, 1):
+            parts.append(fmt_tw_card(m, i, show_triggers=False))
+            parts.append("")
     if pre:
         parts.append("*🔋 技術面蓄勢*")
         for i, m in enumerate(pre, 1):
@@ -2685,6 +2765,7 @@ def main():
         ("tw_status",      cmd_tw_status),
         ("tw_sub",         cmd_tw_sub),
         ("tw_unsub",       cmd_tw_unsub),
+        ("tw_joint",       cmd_tw_joint),    # 法人聯手榜
         # V2.3: 美股指令
         ("us_scan",        cmd_us_scan),
         ("us_squeeze",     cmd_us_squeeze),
@@ -2696,6 +2777,8 @@ def main():
         ("us_status",      cmd_us_status),
         ("us_sub",         cmd_us_sub),
         ("us_unsub",       cmd_us_unsub),
+        ("us_rs",          cmd_us_rs),       # RS Rating 榜
+        ("us_accum",       cmd_us_accum),    # 法人累積榜
         # 篩選設定
         ("set_score",      cmd_set_score),
         ("set_early",      cmd_set_early),
@@ -2708,6 +2791,7 @@ def main():
         ("unsub_all",      cmd_unsub_all),
         # V2.3: 通用查詢
         ("stock",          cmd_stock),
+        ("smartmoney",     cmd_smartmoney),  # 聰明錢榜單
         # Phase 3: 自選股 & 警報
         ("watch",          cmd_watch),
         ("unwatch",        cmd_unwatch),
