@@ -63,6 +63,11 @@ def init_db():
                 foreign_streak INTEGER DEFAULT 3,
                 pre_warn_pct   INTEGER DEFAULT 70
             );
+            CREATE TABLE IF NOT EXISTS subscribers (
+                channel  TEXT    NOT NULL,
+                user_id  INTEGER NOT NULL,
+                PRIMARY KEY (channel, user_id)
+            );
         """)
     log.info(f"[DB] 初始化完成：{DB_PATH}")
 
@@ -183,3 +188,31 @@ def get_closed_positions(user_id: int, limit: int = 10) -> list[dict]:
             "ORDER BY close_time DESC LIMIT ?",
             (user_id, limit)).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── 訂閱 ─────────────────────────────────────────
+def load_subscribers() -> dict[str, set]:
+    """載入所有訂閱，回傳 {channel: set(user_id)}"""
+    result: dict[str, set] = {
+        "general": set(), "pre_pump": set(),
+        "tw": set(), "us": set(),
+    }
+    with _conn() as c:
+        for row in c.execute("SELECT channel, user_id FROM subscribers"):
+            ch = row["channel"]
+            if ch in result:
+                result[ch].add(row["user_id"])
+    return result
+
+
+def save_subscriber(channel: str, user_id: int):
+    with _conn() as c:
+        c.execute("INSERT OR IGNORE INTO subscribers (channel, user_id) VALUES (?, ?)",
+                  (channel, user_id))
+
+
+def delete_subscriber(channel: str, user_id: int):
+    with _conn() as c:
+        c.execute("DELETE FROM subscribers WHERE channel=? AND user_id=?",
+                  (channel, user_id))
+

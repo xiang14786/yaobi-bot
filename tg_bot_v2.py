@@ -582,11 +582,15 @@ async def cmd_us_status(update, ctx):
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_us_sub(update, ctx):
-    US_SUBSCRIBERS.add(update.effective_chat.id)
+    cid = update.effective_chat.id
+    US_SUBSCRIBERS.add(cid)
+    _db.save_subscriber("us", cid)
     await update.message.reply_text("🔔 已訂閱美股盤前預警！（週一到週五 21:00 台灣時間推送）")
 
 async def cmd_us_unsub(update, ctx):
-    US_SUBSCRIBERS.discard(update.effective_chat.id)
+    cid = update.effective_chat.id
+    US_SUBSCRIBERS.discard(cid)
+    _db.delete_subscriber("us", cid)
     await update.message.reply_text("🔕 已取消美股訂閱")
 
 async def push_us_premarket(ctx):
@@ -830,12 +834,16 @@ async def cmd_tw_status(update, ctx):
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_tw_sub(update, ctx):
-    TW_SUBSCRIBERS.add(update.effective_chat.id)
+    cid = update.effective_chat.id
+    TW_SUBSCRIBERS.add(cid)
+    _db.save_subscriber("tw", cid)
     await update.message.reply_text(
         "🇹🇼 已訂閱台股預警！\n每日 08:50（開盤前）自動推送外資買超與蓄勢標的")
 
 async def cmd_tw_unsub(update, ctx):
-    TW_SUBSCRIBERS.discard(update.effective_chat.id)
+    cid = update.effective_chat.id
+    TW_SUBSCRIBERS.discard(cid)
+    _db.delete_subscriber("tw", cid)
     await update.message.reply_text("🔕 已取消台股訂閱")
 
 
@@ -1333,11 +1341,15 @@ async def cmd_reset(update, ctx):
 # 訂閱
 # ============================================================
 async def cmd_sub_pre(update, ctx):
-    PRE_PUMP_SUBSCRIBERS.add(update.effective_chat.id)
+    cid = update.effective_chat.id
+    PRE_PUMP_SUBSCRIBERS.add(cid)
+    _db.save_subscriber("pre_pump", cid)
     await update.message.reply_text("🔋 已訂閱預警！每 30 分鐘自動推送預備暴漲/暴跌榜")
 
 async def cmd_sub(update, ctx):
-    SUBSCRIBERS.add(update.effective_chat.id)
+    cid = update.effective_chat.id
+    SUBSCRIBERS.add(cid)
+    _db.save_subscriber("general", cid)
     await update.message.reply_text("🔔 已訂閱！每小時推送 Top 5")
 
 async def cmd_unsub_all(update, ctx):
@@ -1348,6 +1360,8 @@ async def cmd_unsub_all(update, ctx):
         tv_handler.remove_subscriber(cid)
     TW_SUBSCRIBERS.discard(cid)
     US_SUBSCRIBERS.discard(cid)
+    for ch in ("general", "pre_pump", "tw", "us"):
+        _db.delete_subscriber(ch, cid)
     await update.message.reply_text("🔕 已取消全部訂閱（含 TradingView 警報 + 台股 + 美股預警）")
 
 # ============================================================
@@ -2658,8 +2672,16 @@ async def post_init(app):
     _db.init_db()
     WATCHLISTS       = _db.load_watchlists()
     WATCH_CONDITIONS = _db.load_alert_conditions()
+    # 載入訂閱（跨部署持久化）
+    _subs = _db.load_subscribers()
+    SUBSCRIBERS.update(_subs["general"])
+    PRE_PUMP_SUBSCRIBERS.update(_subs["pre_pump"])
+    TW_SUBSCRIBERS.update(_subs["tw"])
+    US_SUBSCRIBERS.update(_subs["us"])
     log.info(f"[DB] 載入自選股 {sum(len(v) for v in WATCHLISTS.values())} 筆，"
-             f"警報設定 {len(WATCH_CONDITIONS)} 用戶")
+             f"警報設定 {len(WATCH_CONDITIONS)} 用戶，"
+             f"訂閱 general={len(SUBSCRIBERS)} pre={len(PRE_PUMP_SUBSCRIBERS)} "
+             f"tw={len(TW_SUBSCRIBERS)} us={len(US_SUBSCRIBERS)}")
 
     # V2.1: 初始化 TradingView Webhook Handler 並啟動 HTTP 伺服器
     tv_handler = TradingViewWebhookHandler(
