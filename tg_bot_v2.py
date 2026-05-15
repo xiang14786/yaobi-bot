@@ -1430,7 +1430,7 @@ async def background_us_scan(ctx):
         stocks = await get_us_scan(force=True)
         log.info("[背景] 美股快取已刷新")
         # 觸發背景抓法人持股（不阻塞）
-        tickers = [s.ticker for s in stocks if s.fetch_ok]
+        tickers = [s.ticker for s in stocks if s.ticker]
         if tickers:
             refresh_inst_cache(tickers)
     except Exception as e:
