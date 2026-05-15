@@ -470,39 +470,32 @@ def calc_rs_rating(closes: list[float], spy_closes: list[float] | None = None) -
 
 def recalc_rs_ratings(metrics: list) -> list:
     """
-    用同批股票的中位報酬作為基準重算 RS Rating
-    避免沒有 SPY 資料時全員都是 99 的問題
+    用百分位排名重算 RS Rating，確保 0~99 均勻分佈
+    最強的股票 = 99，最弱的 = 0
     """
     if not metrics:
         return metrics
-    # 收集所有股票的 12 個月報酬
-    rets = []
-    for m in metrics:
-        if m.rs_rating > 0:
-            # 反推原始報酬（rs = 50 + ret*50 → ret = (rs-50)/50）
-            rets.append((m.rs_rating - 50) / 50)
-    if not rets:
+    # 收集所有股票的原始報酬（從 calc_rs_rating 的 rs = 50 + ret*50 反推）
+    valid = [(i, m) for i, m in enumerate(metrics) if m.rs_rating > 0]
+    if not valid:
         return metrics
-    import statistics
-    median_ret = statistics.median(rets)
-    # 重新以中位數為基準計算百分位排名
-    for m in metrics:
-        if m.rs_rating > 0:
-            raw_ret = (m.rs_rating - 50) / 50
-            # 相對中位數的超額報酬
-            excess = raw_ret - median_ret
-            m.rs_rating = max(0.0, min(99.0, 50 + excess * 100))
-            # 更新 rs_score
-            if m.rs_rating >= 90:
-                m.rs_score = 15.0
-            elif m.rs_rating >= 80:
-                m.rs_score = 11.0
-            elif m.rs_rating >= 70:
-                m.rs_score = 7.0
-            elif m.rs_rating >= 50:
-                m.rs_score = 3.0
-            else:
-                m.rs_score = 0.0
+    # 按 rs_rating 排序，分配百分位
+    valid_sorted = sorted(valid, key=lambda x: x[1].rs_rating)
+    n = len(valid_sorted)
+    for rank, (i, m) in enumerate(valid_sorted):
+        percentile = rank / (n - 1) * 99 if n > 1 else 50
+        m.rs_rating = round(percentile, 1)
+        # 更新 rs_score
+        if m.rs_rating >= 90:
+            m.rs_score = 15.0
+        elif m.rs_rating >= 80:
+            m.rs_score = 11.0
+        elif m.rs_rating >= 70:
+            m.rs_score = 7.0
+        elif m.rs_rating >= 50:
+            m.rs_score = 3.0
+        else:
+            m.rs_score = 0.0
     return metrics
 
 
@@ -611,7 +604,7 @@ async def fetch_all_us_metrics(
     raw = await fetch_all_us_stocks(tickers=tickers, top_n=top_n)
     metrics = [score_us_stock(d) for d in raw]
     metrics.sort(key=lambda x: x.total_score, reverse=True)
-    # 用同批股票中位數重算 RS Rating，避免全員爆分
+    # 用百分位排名重算 RS Rating（0~99 均勻分佈）
     metrics = recalc_rs_ratings(metrics)
     log.info(f"[US] 評分完成，{len(metrics)} 支")
     return metrics

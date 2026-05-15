@@ -74,7 +74,7 @@ class UsStockData:
 # ──────────────────────────────────────────────
 #  單一股票抓取（在執行緒中同步執行）
 # ──────────────────────────────────────────────
-def _fetch_one_sync(ticker: str, period: str = "3mo") -> UsStockData:
+def _fetch_one_sync(ticker: str, period: str = "1y") -> UsStockData:
     """
     同步版本，由 ThreadPoolExecutor 執行。
     yfinance 是同步函式，不能直接 await。
@@ -179,7 +179,7 @@ def _bulk_fetch_sync(tickers: list[str]) -> list[UsStockData]:
     try:
         # group_by="column" → columns = MultiIndex(field, ticker) 或 flat(field) if single
         raw = yf.download(
-            tickers, period="3mo", auto_adjust=True,
+            tickers, period="1y", auto_adjust=True,
             group_by="column", threads=True,
             progress=False,
         )
@@ -218,7 +218,7 @@ def _bulk_fetch_sync(tickers: list[str]) -> list[UsStockData]:
                 # 單股：直接用 raw（flat columns）
                 df = raw.copy()
 
-            df = df.dropna(subset=["Close"]).tail(60)
+            df = df.dropna(subset=["Close"])
             if len(df) < 5:
                 log.debug(f"[US] {ticker} 資料筆數不足 ({len(df)})")
                 continue
@@ -248,6 +248,10 @@ def _bulk_fetch_sync(tickers: list[str]) -> list[UsStockData]:
                 result.avg_volume   = int(avg20)
                 result.volume_ratio = result.volume / avg20 if avg20 > 0 else 1.0
 
+            # 52 週高低（從 1 年資料計算）
+            if result.highs:
+                result.week52_high = max(result.highs)
+                result.week52_low  = min(result.lows) if result.lows else 0.0
             result.fetch_ok = True
             results.append(result)
         except Exception as e:

@@ -887,24 +887,33 @@ async def cmd_us_accum(update, ctx):
 # ── 加密聰明錢 ──────────────────────────────────────────
 async def cmd_smartmoney(update, ctx):
     """頂級交易者倉位異常 = 聰明錢信號"""
-    coins = CRYPTO_CACHE.get("data", [])
-    if not coins:
-        await update.message.reply_text("⏳ 快取尚未建立，請稍候 30 秒後再試")
-        return
-    smart = find_smart_money(coins)
-    if not smart:
-        await update.message.reply_text("📭 目前無明顯聰明錢信號")
-        return
-    lines = ["🐋 *聰明錢偵測榜*（頂級交易者倉位異常）\n"]
-    for i, c in enumerate(smart[:6], 1):
-        reason = getattr(c, "_smart_reason", "")
-        lines.append(
-            f"*{i}. {c.base}*  `${c.last_price:,.4g}`  {c.price_change_pct:+.1f}%\n"
-            f"  {reason}\n"
-            f"  FR=`{c.funding_rate*100:.3f}%`  頂級多空=`{c.top_trader_ls_ratio:.2f}`\n"
-        )
-    lines.append("_頂級交易者 = Binance 前 20% 資金量帳戶_")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    try:
+        coins = CRYPTO_CACHE.get("data", [])
+        if not coins:
+            await update.message.reply_text("⏳ 快取尚未建立，請稍候 30 秒後再試")
+            return
+        smart = find_smart_money(coins)
+        if not smart:
+            n = len(coins)
+            await update.message.reply_text(
+                f"📭 目前無聰明錢信號（掃描 {n} 幣）"
+                "\n💡 頂級多空比資料需等快取刷新（約 10 分鐘）"
+            )
+            return
+        msg = "🐋 *聰明錢偵測榜*（頂級交易者倉位異常）\n\n"
+        for i, c in enumerate(smart[:6], 1):
+            reason = getattr(c, "_smart_reason", "")
+            tt = getattr(c, "top_trader_ls_ratio", 1.0)
+            fr = getattr(c, "funding_rate", 0.0)
+            msg += f"*{i}. {c.base}* `${c.last_price:,.4g}` {c.price_change_pct:+.1f}%\n"
+            msg += f"  {reason}\n"
+            msg += f"  FR=`{fr*100:.3f}%` 頂級多空=`{tt:.2f}`\n\n"
+        msg += "_頂級交易者 = Binance 前 20% 資金量帳戶_"
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        log.error(f"[smartmoney] 錯誤: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ 錯誤: {e}")
+
 
 # ── 台股排程推送 ──────────────────────────────────────────
 async def push_tw_morning(ctx):
