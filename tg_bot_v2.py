@@ -88,7 +88,7 @@ USER_FILTERS: dict = {}
 SUBSCRIBERS: set = set()
 PRE_PUMP_SUBSCRIBERS: set = set()
 LAST_SCAN: dict = {"time": 0, "data": []}
-CACHE_TTL = 120
+CACHE_TTL = 180   # 3 分鐘
 
 # V2.1: TradingView Webhook 全域實例（post_init 裡初始化）
 tv_handler: TradingViewWebhookHandler | None = None
@@ -141,7 +141,7 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
     now = asyncio.get_event_loop().time()
     if not force and now - LAST_SCAN["time"] < CACHE_TTL and LAST_SCAN["data"]:
         return LAST_SCAN["data"]
-    data = await fetch_all_metrics_v2(top_n=60)
+    data = await fetch_all_metrics_v2(top_n=100)
     LAST_SCAN.update({"time": now, "data": data})
     return data
 
@@ -1416,20 +1416,55 @@ async def push_general(ctx):
 # ============================================================
 # 背景預掃描（每 30 分鐘刷新快取，讓用戶發指令時秒回）
 # ============================================================
+# ── 市場時段感知掃描 ────────────────────────────────────
+import time as _time
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+_CST = _tz(_td(hours=8))   # 台灣時區
+_TW_LAST = 0.0
+_US_LAST = 0.0
+
+def _tw_in_market() -> bool:
+    """台股市場時段：週一~五 08:00~13:30 CST"""
+    now = _dt.now(_CST)
+    if now.weekday() >= 5:
+        return False
+    h = now.hour + now.minute / 60
+    return 8.0 <= h < 13.5
+
+def _us_in_market() -> bool:
+    """美股市場時段：週一~五(台灣) 20:30~04:00 CST"""
+    now = _dt.now(_CST)
+    if now.weekday() >= 5:
+        return False
+    h = now.hour + now.minute / 60
+    return h >= 20.5 or h < 4.0
+
 async def background_tw_scan(ctx):
-    """背景台股預掃描，每 30 分鐘刷新快取"""
+    """台股時段感知掃描：盤中每 10 分，盤外每 60 分"""
+    global _TW_LAST
+    interval = 600 if _tw_in_market() else 3600
+    if _time.time() - _TW_LAST < interval:
+        return
     try:
         await get_tw_scan(force=True)
-        log.info("[背景] 台股快取已刷新")
+        _TW_LAST = _time.time()
+        _tw_label = "盤中" if _tw_in_market() else "盤外"
+        log.info(f"[背景] 台股快取已刷新（{_tw_label}）")
     except Exception as e:
         log.error(f"[背景] 台股掃描失敗: {e}")
 
 async def background_us_scan(ctx):
-    """背景美股預掃描，每 30 分鐘刷新快取"""
+    """美股時段感知掃描：盤中每 10 分，盤外每 60 分"""
+    global _US_LAST
+    interval = 600 if _us_in_market() else 3600
+    if _time.time() - _US_LAST < interval:
+        return
     try:
         stocks = await get_us_scan(force=True)
-        log.info("[背景] 美股快取已刷新")
-        # 觸發背景抓法人持股（不阻塞）
+        _US_LAST = _time.time()
+        _us_label = "盤中" if _us_in_market() else "盤外"
+        log.info(f"[背景] 美股快取已刷新（{_us_label}）")
         tickers = [s.ticker for s in stocks if s.ticker]
         if tickers:
             refresh_inst_cache(tickers)
@@ -2865,9 +2900,9 @@ def main():
     # 美股排程：每日 21:00 台灣時間（= UTC 13:00，美東 09:00 開盤前）
     app.job_queue.run_daily(push_us_premarket, time=dtime(13, 0))
     # 背景預掃描（快取暖身，讓用戶發指令時秒回）
-    app.job_queue.run_repeating(background_tw_scan,          interval=1800, first=60)
-    app.job_queue.run_repeating(background_us_scan,          interval=1800, first=180)
-    app.job_queue.run_repeating(background_crypto_scan,      interval=600,  first=30)
+    app.job_queue.run_repeating(background_tw_scan,          interval=300,  first=60)   # 每5分觸發，內部判斷時段
+    app.job_queue.run_repeating(background_us_scan,          interval=300,  first=180)  # 每5分觸發，內部判斷時段
+    app.job_queue.run_repeating(background_crypto_scan,      interval=180,  first=30)   # 3分鐘
     # Phase 3: 自選股監控（每 30 分鐘）
     app.job_queue.run_repeating(background_watchlist_monitor, interval=1800, first=300)
     # Phase 2: 倉位監控（每 30 分鐘）
