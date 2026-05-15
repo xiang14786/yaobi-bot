@@ -12,9 +12,10 @@
 | `tg_bot_v2.py` | 主程式，所有 TG 指令與排程 |
 | `tw_data_fetcher.py` | 台股資料抓取（TWSE T86 + FinMind） |
 | `tw_stock_scorer.py` | 台股評分邏輯 |
-| `us_data_fetcher.py` | 美股資料抓取（yfinance bulk download） |
-| `us_stock_scorer.py` | 美股評分邏輯 |
-| `yaobi_scorer_v2.py` | 加密貨幣評分邏輯 |
+| `us_data_fetcher.py` | 美股資料抓取（yfinance bulk download）+ 法人持股背景快取 |
+| `us_stock_scorer.py` | 美股評分邏輯（RS Rating + A/D Ratio）|
+| `yaobi_scorer_v2.py` | 加密貨幣評分邏輯（Funding Rate + OI + 頂級多空比）|
+| `db.py` | SQLite 持久化（倉位、自選股、警報條件）|
 | `fly.toml` | Fly.io 部署設定 |
 
 ## 部署指令
@@ -29,41 +30,68 @@ fly logs -a yaobi-bot-tw
 git add -A
 git commit -m "說明"
 git push
+
+# 機器沒啟動時手動啟動
+fly machine start <machine_id> -a yaobi-bot-tw
 ```
 
 ## 已完成功能
+
 ### V2.3 Phase 1 ✅
 - 背景預掃描（台股/美股每 30 分，加密每 10 分）
 - `/stock` 通用個股查詢（自動判斷台股/加密/美股）
 - T86 外資連續天數改為 10 天歷史
 - TWSE 回傳股票 < 30 支時自動補 CORE_TW50
 
-### V2.3 Phase 3 ✅
+### V2.3 Phase 3 — 自選股 & 警報 ✅
 - `/watch` `/unwatch` `/mywatchlist` — 自選股追蹤
 - `/alert foreign N` — 外資連買 N 天警報
 - `/alert pre N` — 評分達 N% 預警
 - 背景自選股監控（每 30 分鐘）
 - `/stock BTC` 加入 4H K 線方向信號（Binance 免費 API）
 
-### 待完成
-#### Phase 2（最後）
-- 倉位追蹤（per-user，admin 看全部）
-- `/enter [symbol] [price]` — 進場，bot 建議 TP/SL
-- `/close [symbol]` — 平倉
-- Trailing stop
-- SQLite 持久化
+### V2.3 Phase 2 — 倉位追蹤 ✅
+- `/enter [symbol] [price] [l/s] [槓桿]` — 進場，bot 自動建議 TP/SL（InlineKeyboard 確認）
+- `/close [symbol] [價格]` — 手動平倉，多筆時顯示選單
+- `/positions` — 查看開倉 & 近期平倉紀錄（admin 可看全部用戶）
+- Trailing Stop — 背景每 30 分監控，多單新高時 SL 上移（保留 50% 利潤）
+- 觸及 TP/SL 自動推播通知
+- 動能轉弱 / RSI 過熱 / 法人轉賣 動態出場建議
+- SQLite 持久化（`db.py`，`yaobi.db`）— **重啟不消失，重部署會清空**
 
-#### 策略升級（三市場）
-- 加密：Funding Rate + OI + 頂級交易者多空比（Binance/Bybit 免費 API）
-- 加密聰明錢榜單
-- 台股：提高投信權重、法人聯手榜（外資+投信同買）
-- 美股：RS Rating + 法人累積追蹤
+### V2.3 策略升級 ✅
+#### 加密貨幣
+- Funding Rate、OI、頂級交易者多空比（Binance API）整合進評分
+- `has_tt_data` 標記確保只分析有真實頂級資料的幣
+- `/smartmoney` — 頂級交易者倉位異常偵測（機構建倉 / 軋空機會 / 多頭優勢 / 極端空頭），無極端信號時顯示前 3 高分幣作參考
+
+#### 台股
+- 投信權重提高（25% → 35%），投信加分 +18/+25
+- 法人聯手偵測：外資 + 投信同買 → 觸發 `🤝法人聯手` tag，+20 分
+- `/tw_joint` — 法人聯手榜
+
+#### 美股
+- RS Rating（IBD 風格 0-99 百分位，1 年相對強度）
+- A/D Ratio（上漲日成交量 / 下跌日成交量，法人累積指標）
+- `/us_rs` — RS Rating 領導股榜
+- `/us_accum` — 法人累積榜
+- 法人持股（`inst_pct`）改為背景 thread 異步抓取，不阻塞主掃描；顯示「法人載入中...」直到快取建立
+
+## 待完成
+- **Fly.io Volume 掛載** — 讓 SQLite 跨部署持久化（目前重部署倉位資料會消失）
+  - 需執行：`fly volumes create yaobi_data --size 1 -a yaobi-bot-tw`
+  - fly.toml 加 `[mounts]` section，DB_PATH 改指向 `/data/yaobi.db`
+- `/tw_status` 加入法人聯手計數顯示（小功能）
 
 ## 已知問題 / 注意事項
 - PowerShell 寫 fly.toml 需注意 BOM 編碼問題（用 `New-Object System.Text.UTF8Encoding $false`）
-- yfinance `t.info` 容易卡住，已改用 `yf.download()` bulk 方式
+- yfinance `t.info` 容易卡住，已改用 `yf.download()` bulk 方式；法人持股改為背景 thread 抓取
 - FinMind 融資融券偶爾 timeout（2337、2303、2409、3481），會自動重試
-- git commit 前若有 index.lock，需手動刪除 `.git/index.lock`
+- git commit 前若有 index.lock，需手動刪除 `.git/index.lock`（PowerShell: `Remove-Item .git\index.lock`）
+- Fly.io 機器有時進入 stopped 狀態（exit code 0），需手動 `fly machine start`
+- f-string 中不能直接寫 `\n`，bash patch 腳本用 heredoc 時容易踩到此坑
+- Binance top trader API 只支援主流幣，小幣回傳空陣列（`has_tt_data=False`）
+- 美股法人持股（`inst_pct`）需從 `us_data_fetcher.get_inst_pct(ticker)` 讀取背景快取，不是直接從 metrics 物件讀
 
 ## 用戶偏好
 - 喜歡簡短、直接的回覆

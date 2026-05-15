@@ -3,9 +3,10 @@ db.py — SQLite 持久化模組
 ==========================
 儲存：倉位、自選股、警報條件
 
-注意：Fly.io 重新部署會清空檔案系統。
-若需跨部署持久化，需要掛載 Fly.io Volume 到 /data。
-目前先存在 /app/yaobi.db（重啟不消失，重部署會消失）。
+持久化策略：
+- 優先使用環境變數 DB_PATH
+- 若 /data 目錄存在（Fly.io Volume 掛載），使用 /data/yaobi.db（跨部署持久）
+- fallback: /app/yaobi.db（重啟不消失，重部署會消失）
 """
 
 import os
@@ -15,7 +16,14 @@ from datetime import datetime
 
 log = logging.getLogger("db")
 
-DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "yaobi.db"))
+def _resolve_db_path() -> str:
+    if "DB_PATH" in os.environ:
+        return os.environ["DB_PATH"]
+    if os.path.isdir("/data"):
+        return "/data/yaobi.db"
+    return os.path.join(os.path.dirname(__file__), "yaobi.db")
+
+DB_PATH = _resolve_db_path()
 
 
 def _conn() -> sqlite3.Connection:
