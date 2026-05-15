@@ -863,7 +863,7 @@ async def cmd_us_rs(update, ctx):
         bar = "🟢" if m.rs_rating >= 90 else "🔵"
         lines.append(
             bar + " *" + m.ticker + "* `RS=" + f"{m.rs_rating:.0f}" + "` 總分`" + f"{m.total_score:.0f}" + "`\n"
-            "  " + m.direction + f"  52W高`{m.dist_52w_high_pct:+.1f}%`  法人`{m.inst_pct:.0%}`\n"
+            "  " + m.direction + f"  52W高`{m.dist_52w_high_pct:+.1f}%`  `" + (f"法人{m.inst_pct:.0%}" if m.inst_pct > 0 else "法人N/A") + "`\n"
         )
     lines.append("_RS Rating = 近 12 個月相對大盤強度_")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
@@ -879,7 +879,7 @@ async def cmd_us_accum(update, ctx):
     for i, m in enumerate(ac[:8], 1):
         lines.append(
             f"*{i}. {m.ticker}* 累積分`{m.accum_score:.0f}` RS=`{m.rs_rating:.0f}`\n"
-            f"  {m.direction}  法人持股`{m.inst_pct:.0%}`\n"
+            f"  {m.direction}  `" + (f"法人{m.inst_pct:.0%}" if m.inst_pct > 0 else "法人N/A") + "`\n"
         )
     lines.append("_A/D = 上漲日成交量 / 下跌日成交量，>1.2 = 法人在買_")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
@@ -888,7 +888,7 @@ async def cmd_us_accum(update, ctx):
 async def cmd_smartmoney(update, ctx):
     """頂級交易者倉位異常 = 聰明錢信號"""
     try:
-        coins = CRYPTO_CACHE.get("data", [])
+        coins = LAST_SCAN.get("data", [])
         if not coins:
             await update.message.reply_text("⏳ 快取尚未建立，請稍候 30 秒後再試")
             return
