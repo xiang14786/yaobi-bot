@@ -73,6 +73,7 @@ from us_stock_scorer import (
     apply_us_filters,
     DEFAULT_US_FILTERS,
 )
+from us_data_fetcher import refresh_inst_cache, get_inst_pct
 # ──────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -863,7 +864,7 @@ async def cmd_us_rs(update, ctx):
         bar = "🟢" if m.rs_rating >= 90 else "🔵"
         lines.append(
             bar + " *" + m.ticker + "* `RS=" + f"{m.rs_rating:.0f}" + "` 總分`" + f"{m.total_score:.0f}" + "`\n"
-            "  " + m.direction + f"  52W高`{m.dist_52w_high_pct:+.1f}%`  `" + (f"法人{m.inst_pct:.0%}" if m.inst_pct > 0 else "法人N/A") + "`\n"
+            "  " + m.direction + f"  52W高`{m.dist_52w_high_pct:+.1f}%`  `" + (lambda p: f"法人{p:.0%}" if p >= 0 else "法人載入中...")(get_inst_pct(m.ticker)) + "`\n"
         )
     lines.append("_RS Rating = 近 12 個月相對大盤強度_")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
@@ -879,7 +880,7 @@ async def cmd_us_accum(update, ctx):
     for i, m in enumerate(ac[:8], 1):
         lines.append(
             f"*{i}. {m.ticker}* 累積分`{m.accum_score:.0f}` RS=`{m.rs_rating:.0f}`\n"
-            f"  {m.direction}  `" + (f"法人{m.inst_pct:.0%}" if m.inst_pct > 0 else "法人N/A") + "`\n"
+            f"  {m.direction}  `" + (lambda p: f"法人{p:.0%}" if p >= 0 else "法人載入中...")(get_inst_pct(m.ticker)) + "`\n"
         )
     lines.append("_A/D = 上漲日成交量 / 下跌日成交量，>1.2 = 法人在買_")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
@@ -893,14 +894,20 @@ async def cmd_smartmoney(update, ctx):
             await update.message.reply_text("⏳ 快取尚未建立，請稍候 30 秒後再試")
             return
         smart = find_smart_money(coins)
+        n_total = len(coins)
+        n_tt = sum(1 for c in coins if getattr(c, "has_tt_data", False))
         if not smart:
-            n = len(coins)
-            await update.message.reply_text(
-                f"📭 目前無聰明錢信號（掃描 {n} 幣）"
-                "\n💡 頂級多空比資料需等快取刷新（約 10 分鐘）"
-            )
+            if n_tt == 0:
+                msg_no = (f"📭 無聰明錢信號（掃描 {n_total} 幣）\n"
+                          f"⚠️ 頂級多空資料尚未載入，背景掃描完成後（約 10 分鐘）再試")
+            else:
+                msg_no = (f"📭 目前無聰明錢信號\n"
+                          f"📊 已掃描 {n_total} 幣，其中 {n_tt} 幣有頂級多空資料")
+            await update.message.reply_text(msg_no)
             return
-        msg = "🐋 *聰明錢偵測榜*（頂級交易者倉位異常）\n\n"
+        n_total = len(coins)
+        n_tt = sum(1 for c in coins if getattr(c, "has_tt_data", False))
+        msg = f"🐋 *聰明錢偵測榜*（{n_tt}/{n_total} 幣有頂級資料）\n\n"
         for i, c in enumerate(smart[:6], 1):
             reason = getattr(c, "_smart_reason", "")
             tt = getattr(c, "top_trader_ls_ratio", 1.0)
@@ -1403,8 +1410,12 @@ async def background_tw_scan(ctx):
 async def background_us_scan(ctx):
     """背景美股預掃描，每 30 分鐘刷新快取"""
     try:
-        await get_us_scan(force=True)
+        stocks = await get_us_scan(force=True)
         log.info("[背景] 美股快取已刷新")
+        # 觸發背景抓法人持股（不阻塞）
+        tickers = [s.ticker for s in stocks if s.fetch_ok]
+        if tickers:
+            refresh_inst_cache(tickers)
     except Exception as e:
         log.error(f"[背景] 美股掃描失敗: {e}")
 

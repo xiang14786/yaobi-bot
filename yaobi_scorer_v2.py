@@ -94,6 +94,7 @@ class CoinMetricsV2:
     top_trader_ls_ratio: float = 1.0    # >1 多頭偏向, <1 空頭偏向
     top_trader_pos_ratio: float = 1.0
     score_top_trader: float = 0.0
+    has_tt_data: bool = False   # 是否有真實頂級多空資料
 
     total_score: float = 0.0
     direction: str = "NEUTRAL"
@@ -342,6 +343,7 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
                 if isinstance(tt_ls_raw, list) and tt_ls_raw:
                     tt_ratios = [float(x.get("longShortRatio", 1)) for x in tt_ls_raw]
                     m.top_trader_ls_ratio = tt_ratios[-1]
+                    m.has_tt_data = True
                 if isinstance(tt_pos_raw, list) and tt_pos_raw:
                     tt_pos = [float(x.get("longShortRatio", 1)) for x in tt_pos_raw]
                     m.top_trader_pos_ratio = tt_pos[-1]
@@ -540,9 +542,12 @@ def find_smart_money(coins: list) -> list:
     聰明錢榜單：頂級交易者極端偏向 + OI 增加 + 尚未啟動
     頂級交易者大幅偏多/空且與市場方向相反 = 逆向指標警示
     或頂級交易者偏多 + OI暴增 + 未大漲 = 機構建倉
+    只分析有真實 top trader 資料的幣（has_tt_data=True）
     """
     result = []
     for c in coins:
+        if not getattr(c, "has_tt_data", False):
+            continue   # 跳過沒有頂級多空資料的幣
         tt = c.top_trader_ls_ratio
         pos = c.top_trader_pos_ratio
         # 機構建倉信號：頂級偏多 + OI高 + 未大漲 + 評分高

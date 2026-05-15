@@ -340,3 +340,46 @@ if __name__ == "__main__":
             print(f"  K 線筆數: {len(s.closes)}")
 
     asyncio.run(test())
+
+
+# ── 法人持股背景快取（避免阻塞主掃描）──────────────────────────
+import threading as _threading
+
+_INST_CACHE: dict[str, float] = {}          # ticker -> heldPercentInstitutions
+_INST_CACHE_LOCK = _threading.Lock()
+_INST_FETCH_RUNNING = False
+
+def _fetch_inst_background(tickers: list[str]):
+    """在背景 thread 逐一抓法人持股，不阻塞主線程"""
+    global _INST_FETCH_RUNNING
+    import yfinance as _yf
+    for tk in tickers:
+        try:
+            info = _yf.Ticker(tk).info or {}
+            pct = float(
+                info.get("heldPercentInstitutions") or
+                info.get("institutionPercentHeld") or 0
+            )
+            with _INST_CACHE_LOCK:
+                _INST_CACHE[tk] = pct
+        except Exception:
+            pass
+    _INST_FETCH_RUNNING = False
+    log.info(f"[US 法人快取] 完成，共 {len(_INST_CACHE)} 支")
+
+def refresh_inst_cache(tickers: list[str]):
+    """觸發背景抓法人持股（若已在跑則跳過）"""
+    global _INST_FETCH_RUNNING
+    with _INST_CACHE_LOCK:
+        if _INST_FETCH_RUNNING:
+            return
+        _INST_FETCH_RUNNING = True
+    t = _threading.Thread(target=_fetch_inst_background, args=(tickers,), daemon=True)
+    t.start()
+    log.info(f"[US 法人快取] 背景開始抓 {len(tickers)} 支")
+
+def get_inst_pct(ticker: str) -> float:
+    """從快取取法人持股；沒有則回 -1（表示尚未載入）"""
+    with _INST_CACHE_LOCK:
+        return _INST_CACHE.get(ticker, -1.0)
+
