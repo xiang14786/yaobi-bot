@@ -550,22 +550,38 @@ def find_smart_money(coins: list) -> list:
             continue   # 跳過沒有頂級多空資料的幣
         tt = c.top_trader_ls_ratio
         pos = c.top_trader_pos_ratio
-        # 機構建倉信號：頂級偏多 + OI高 + 未大漲 + 評分高
-        if (tt > 1.5 and pos > 1.3
-                and abs(c.price_change_pct) < 5
-                and c.open_interest_usd > 5e7
-                and c.score_early > 30):
+        # 機構建倉信號：頂級偏多 + OI 中等以上 + 未大漲
+        if (tt > 1.3 and pos > 1.15
+                and abs(c.price_change_pct) < 8
+                and c.open_interest_usd > 1e7):
             c._smart_reason = f"🐋 機構建多倉 (頂級多空={tt:.2f}, 倉位比={pos:.2f})"
             result.append(c)
-        # 逆向警示：頂級極端偏空但 funding 正值（散戶強多）→ 軋空機會
-        elif (tt < 0.5 and c.funding_rate > 0.0005
-              and abs(c.price_change_pct) < 8):
+        # 逆向警示：頂級偏空但 funding 正值（散戶強多）→ 軋空機會
+        elif (tt < 0.7 and c.funding_rate > 0.0002
+              and abs(c.price_change_pct) < 10):
             c._smart_reason = f"⚡ 軋空機會 (頂級空={tt:.2f}, FR={c.funding_rate*100:.3f}%)"
             result.append(c)
-        # 頂級極端偏多 + FR 負（空頭付費）= 多頭有利
-        elif (tt > 2.0 and c.funding_rate < -0.0003
-              and abs(c.price_change_pct) < 8):
+        # 頂級偏多 + FR 負（空頭付費）= 多頭有利
+        elif (tt > 1.5 and c.funding_rate < -0.0001
+              and abs(c.price_change_pct) < 10):
             c._smart_reason = f"💎 多頭優勢 (頂級多={tt:.2f}, FR={c.funding_rate*100:.3f}%)"
             result.append(c)
+        # 頂級明顯偏空 + FR 也負（全面看空）= 極端悲觀警示
+        elif (tt < 0.8 and pos < 0.8 and c.funding_rate < -0.0003):
+            c._smart_reason = f"🔻 極端空頭 (頂級多空={tt:.2f}, FR={c.funding_rate*100:.3f}%)"
+            result.append(c)
+
     result.sort(key=lambda x: x.score_top_trader, reverse=True)
+
+    # Fallback：若無明顯信號，顯示分數最高的前 3 幣作為參考
+    if not result:
+        candidates = sorted(
+            [c for c in coins if getattr(c, "has_tt_data", False)],
+            key=lambda x: x.score_top_trader, reverse=True
+        )[:3]
+        for c in candidates:
+            tt = c.top_trader_ls_ratio
+            c._smart_reason = f"📊 參考（頂級多空={tt:.2f}, 無極端信號）"
+        return candidates
+
     return result[:10]
