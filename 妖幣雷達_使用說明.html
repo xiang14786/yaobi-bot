@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>妖幣雷達 V2.3 使用說明</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+    line-height: 1.7;
+  }
+  .hero {
+    background: linear-gradient(135deg, #1a1f2e 0%, #0d1117 50%, #1a2640 100%);
+    padding: 60px 40px 50px;
+    text-align: center;
+    border-bottom: 1px solid #21262d;
+  }
+  .hero h1 { font-size: 2.8rem; font-weight: 800; margin-bottom: 8px; }
+  .hero h1 span { background: linear-gradient(90deg, #58a6ff, #3fb950); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero .subtitle { color: #8b949e; font-size: 1.1rem; }
+  .badge { display: inline-block; background: #238636; color: #fff; font-size: 0.75rem; padding: 2px 10px; border-radius: 20px; margin-left: 10px; vertical-align: middle; }
+
+  .container { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  h2 { font-size: 1.5rem; font-weight: 700; margin: 48px 0 20px; padding-bottom: 10px; border-bottom: 1px solid #21262d; display: flex; align-items: center; gap: 10px; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; color: #79c0ff; }
+
+  .market-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 32px; }
+  .market-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 12px;
+    padding: 24px 20px;
+    text-align: center;
+    transition: border-color 0.2s;
+  }
+  .market-card:hover { border-color: #58a6ff; }
+  .market-card .icon { font-size: 2.2rem; margin-bottom: 10px; }
+  .market-card h3 { margin: 0 0 8px; color: #e6edf3; font-size: 1rem; }
+  .market-card p { color: #8b949e; font-size: 0.85rem; }
+
+  .cmd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .cmd-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px 18px;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    transition: border-color 0.2s;
+  }
+  .cmd-card:hover { border-color: #30363d; }
+  .cmd-card .icon { font-size: 1.5rem; flex-shrink: 0; margin-top: 2px; }
+  .cmd-card .cmd { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.9rem; color: #79c0ff; font-weight: 600; }
+  .cmd-card .desc { color: #8b949e; font-size: 0.85rem; margin-top: 3px; }
+  .cmd-card .example { font-family: monospace; font-size: 0.8rem; color: #3fb950; margin-top: 4px; background: #0d1117; padding: 3px 8px; border-radius: 4px; display: inline-block; }
+
+  .section-full .cmd-card { grid-column: span 1; }
+
+  .flow-steps { display: flex; gap: 0; margin: 20px 0; flex-wrap: wrap; }
+  .step {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 18px 20px;
+    flex: 1;
+    min-width: 160px;
+    position: relative;
+  }
+  .step:not(:last-child)::after {
+    content: "→";
+    position: absolute;
+    right: -18px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #58a6ff;
+    font-size: 1.2rem;
+    z-index: 1;
+  }
+  .step + .step { margin-left: 24px; }
+  .step .num { background: #1f6feb; color: #fff; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; margin-bottom: 10px; }
+  .step .title { font-weight: 600; font-size: 0.95rem; margin-bottom: 4px; }
+  .step .detail { color: #8b949e; font-size: 0.82rem; }
+  .step .code { font-family: monospace; font-size: 0.82rem; color: #79c0ff; margin-top: 6px; }
+
+  .tip-box {
+    background: #0d2149;
+    border: 1px solid #1f6feb;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 20px 0;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .tip-box .tip-icon { font-size: 1.3rem; flex-shrink: 0; }
+  .tip-box p { color: #c9d1d9; font-size: 0.9rem; }
+  .tip-box strong { color: #79c0ff; }
+
+  .indicator-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  .ind-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .ind-card .label { font-size: 0.8rem; color: #8b949e; margin-bottom: 4px; }
+  .ind-card .name { font-weight: 700; font-size: 1rem; color: #e6edf3; margin-bottom: 6px; }
+  .ind-card .explain { font-size: 0.82rem; color: #8b949e; }
+  .ind-card .bull { color: #3fb950; font-size: 0.82rem; margin-top: 4px; }
+  .ind-card .bear { color: #f85149; font-size: 0.82rem; }
+
+  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .tag {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 500;
+  }
+  .tag.green { background: #0d3321; color: #3fb950; border: 1px solid #238636; }
+  .tag.red { background: #2d0f0f; color: #f85149; border: 1px solid #6e1313; }
+  .tag.blue { background: #0d2149; color: #79c0ff; border: 1px solid #1f6feb; }
+  .tag.yellow { background: #2d2007; color: #e3b341; border: 1px solid #5c4a00; }
+
+  .score-bar { background: #21262d; border-radius: 20px; height: 12px; margin: 6px 0; overflow: hidden; }
+  .score-fill { height: 100%; border-radius: 20px; background: linear-gradient(90deg, #1f6feb, #3fb950); }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th { background: #161b22; color: #8b949e; font-size: 0.82rem; font-weight: 600; text-align: left; padding: 10px 14px; border-bottom: 1px solid #21262d; }
+  td { padding: 10px 14px; border-bottom: 1px solid #161b22; font-size: 0.88rem; color: #c9d1d9; }
+  td code { font-family: monospace; color: #79c0ff; background: #0d1117; padding: 1px 6px; border-radius: 4px; }
+  tr:hover td { background: #161b22; }
+
+  .tg-mockup {
+    background: #1c2733;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 20px 0;
+    font-family: -apple-system, sans-serif;
+    max-width: 400px;
+  }
+  .tg-msg {
+    background: #2b5278;
+    border-radius: 16px 16px 4px 16px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    font-size: 0.88rem;
+    display: inline-block;
+    max-width: 85%;
+    float: right;
+    clear: both;
+    color: #fff;
+  }
+  .tg-reply {
+    background: #182533;
+    border-radius: 16px 16px 16px 4px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    font-size: 0.83rem;
+    max-width: 90%;
+    clear: both;
+    color: #e6edf3;
+    border: 1px solid #21262d;
+  }
+  .tg-reply .bold { font-weight: 700; }
+  .tg-reply .green { color: #3fb950; }
+  .tg-reply .red { color: #f85149; }
+  .tg-reply .mono { font-family: monospace; font-size: 0.8rem; }
+  .clearfix::after { content: ""; display: table; clear: both; }
+
+  footer { text-align: center; color: #8b949e; font-size: 0.82rem; padding: 40px; border-top: 1px solid #21262d; }
+
+  @media (max-width: 600px) {
+    .market-grid { grid-template-columns: 1fr; }
+    .cmd-grid { grid-template-columns: 1fr; }
+    .indicator-grid { grid-template-columns: 1fr; }
+    .flow-steps { flex-direction: column; }
+    .step::after { display: none; }
+    .step + .step { margin-left: 0; margin-top: 12px; }
+    .hero h1 { font-size: 1.8rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div style="font-size:3rem;margin-bottom:12px;">🔮</div>
+  <h1><span>妖幣雷達</span> V2.3</h1>
+  <p class="subtitle">多市場 Telegram 交易機器人 <span class="badge">最新版</span></p>
+  <p style="color:#8b949e;font-size:0.85rem;margin-top:12px;">加密貨幣 · 台股 · 美股｜自動掃描 · 倉位追蹤 · 聰明錢偵測</p>
+</div>
+
+<div class="container">
+
+  <!-- 三大市場 -->
+  <h2>📊 支援三大市場</h2>
+  <div class="market-grid">
+    <div class="market-card">
+      <div class="icon">🪙</div>
+      <h3>加密貨幣</h3>
+      <p>Binance 合約市場<br>每 10 分鐘自動掃描<br>60 大主流幣</p>
+    </div>
+    <div class="market-card">
+      <div class="icon">🇹🇼</div>
+      <h3>台股</h3>
+      <p>TWSE + FinMind<br>每 30 分鐘自動掃描<br>法人籌碼追蹤</p>
+    </div>
+    <div class="market-card">
+      <div class="icon">🇺🇸</div>
+      <h3>美股</h3>
+      <p>Yahoo Finance<br>每 30 分鐘自動掃描<br>RS Rating + 法人累積</p>
+    </div>
+  </div>
+
+  <!-- 快速開始 -->
+  <h2>🚀 快速開始</h2>
+  <div class="flow-steps">
+    <div class="step">
+      <div class="num">1</div>
+      <div class="title">啟動 Bot</div>
+      <div class="detail">傳送指令給 Bot</div>
+      <div class="code">/start</div>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <div class="title">掃描市場</div>
+      <div class="detail">查看當前機會榜</div>
+      <div class="code">/top10</div>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <div class="title">查詢個股</div>
+      <div class="detail">查任何標的詳情</div>
+      <div class="code">/stock BTC</div>
+    </div>
+    <div class="step">
+      <div class="num">4</div>
+      <div class="title">加入自選</div>
+      <div class="detail">追蹤你的標的</div>
+      <div class="code">/watch BTC</div>
+    </div>
+    <div class="step">
+      <div class="num">5</div>
+      <div class="title">記錄進場</div>
+      <div class="detail">追蹤倉位盈虧</div>
+      <div class="code">/enter BTC 95000</div>
+    </div>
+  </div>
+
+  <!-- 加密貨幣指令 -->
+  <h2>🪙 加密貨幣指令</h2>
+  <div class="cmd-grid">
+    <div class="cmd-card">
+      <div class="icon">🔋</div>
+      <div>
+        <div class="cmd">/pre_pump</div>
+        <div class="desc">預備暴漲榜 — 尚未大漲但評分高的幣，適合提前佈局</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">⚠️</div>
+      <div>
+        <div class="cmd">/pre_dump</div>
+        <div class="desc">預備暴跌榜 — 評分低、多空轉差，適合做空或避開</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🎯</div>
+      <div>
+        <div class="cmd">/squeeze</div>
+        <div class="desc">布林帶壓縮榜 — 波動收窄蓄勢，即將爆發的幣</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🏆</div>
+      <div>
+        <div class="cmd">/confidence</div>
+        <div class="desc">高信心榜 — 多個指標同時看多，勝率較高</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🎛️</div>
+      <div>
+        <div class="cmd">/scan</div>
+        <div class="desc">個人化掃描 — 依你設定的門檻篩選（可用 /set_score 調整）</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🔟</div>
+      <div>
+        <div class="cmd">/top10</div>
+        <div class="desc">綜合 Top 10 — 總評分最高的 10 個幣</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📈</div>
+      <div>
+        <div class="cmd">/pump</div>
+        <div class="desc">看多榜 — 多頭信號強的幣</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📉</div>
+      <div>
+        <div class="cmd">/dump</div>
+        <div class="desc">看空榜 — 空頭信號強的幣</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🐋</div>
+      <div>
+        <div class="cmd">/smartmoney</div>
+        <div class="desc">聰明錢偵測 — Binance 頂級交易者倉位異常信號</div>
+        <div class="example">機構建倉 / 軋空機會 / 多頭優勢</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">💡</div>
+      <div>
+        <div class="cmd">/trade BTC</div>
+        <div class="desc">完整交易建議 — 進場時機、止盈止損、風險評估</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🔍</div>
+      <div>
+        <div class="cmd">/detail BTC</div>
+        <div class="desc">詳細指標 — 所有原始數據一次看</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📐</div>
+      <div>
+        <div class="cmd">/structure BTC</div>
+        <div class="desc">OB + FVG 結構分析 — 訂單塊與價值缺口偵測</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 台股指令 -->
+  <h2>🇹🇼 台股指令</h2>
+  <div class="cmd-grid">
+    <div class="cmd-card">
+      <div class="icon">🔋</div>
+      <div>
+        <div class="cmd">/tw_scan</div>
+        <div class="desc">台股預備暴漲榜 — 法人買超 + 技術面蓄勢</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🎯</div>
+      <div>
+        <div class="cmd">/tw_squeeze</div>
+        <div class="desc">台股布林帶壓縮 — 波動收窄蓄勢待發</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🏦</div>
+      <div>
+        <div class="cmd">/tw_foreign</div>
+        <div class="desc">外資連買榜 — 外資連續買超天數排行</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🤝</div>
+      <div>
+        <div class="cmd">/tw_joint</div>
+        <div class="desc">法人聯手榜 — 外資 + 投信同時買超，最強信號</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🔟</div>
+      <div>
+        <div class="cmd">/tw_top10</div>
+        <div class="desc">台股綜合 Top 10</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📋</div>
+      <div>
+        <div class="cmd">/tw_detail 2330</div>
+        <div class="desc">台股個股詳細指標</div>
+        <div class="example">/tw_detail 2330 查台積電</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 美股指令 -->
+  <h2>🇺🇸 美股指令</h2>
+  <div class="cmd-grid">
+    <div class="cmd-card">
+      <div class="icon">🔋</div>
+      <div>
+        <div class="cmd">/us_scan</div>
+        <div class="desc">美股預備暴漲榜 — RS Rating 高 + 技術蓄勢</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🎯</div>
+      <div>
+        <div class="cmd">/us_squeeze</div>
+        <div class="desc">美股布林帶壓縮榜</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">⚡</div>
+      <div>
+        <div class="cmd">/us_short</div>
+        <div class="desc">軋空候選榜 — 空頭比例高但技術轉強，軋空潛力</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🚀</div>
+      <div>
+        <div class="cmd">/us_momentum</div>
+        <div class="desc">動能榜 — 近期強勢領漲股</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📊</div>
+      <div>
+        <div class="cmd">/us_rs</div>
+        <div class="desc">RS Rating 領導股榜 — IBD 風格 1 年相對強度 0-99 分</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🏛️</div>
+      <div>
+        <div class="cmd">/us_accum</div>
+        <div class="desc">法人累積榜 — A/D Ratio 高的股，法人在買</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用查詢 -->
+  <h2>🔍 通用查詢指令</h2>
+  <div class="tip-box">
+    <div class="tip-icon">💡</div>
+    <p><strong>/stock</strong> 會自動判斷市場：輸入股票代號就查台股、英文代號查美股、幣種查加密。</p>
+  </div>
+  <div class="cmd-grid">
+    <div class="cmd-card">
+      <div class="icon">📊</div>
+      <div>
+        <div class="cmd">/stock [代號]</div>
+        <div class="desc">通用個股查詢，自動識別市場</div>
+        <div class="example">/stock 2330 &nbsp; /stock BTC &nbsp; /stock NVDA</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🤖</div>
+      <div>
+        <div class="cmd">/status</div>
+        <div class="desc">Bot 運作狀態 — 快取時間、掃描幣數、上次更新</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自選股 & 警報 -->
+  <h2>⭐ 自選股 & 警報</h2>
+  <div class="cmd-grid">
+    <div class="cmd-card">
+      <div class="icon">⭐</div>
+      <div>
+        <div class="cmd">/watch [代號]</div>
+        <div class="desc">加入自選股，Bot 會主動監控並在條件觸發時通知你</div>
+        <div class="example">/watch BTC &nbsp;&nbsp; /watch 2330</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🗑️</div>
+      <div>
+        <div class="cmd">/unwatch [代號]</div>
+        <div class="desc">移除自選股</div>
+        <div class="example">/unwatch BTC</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📋</div>
+      <div>
+        <div class="cmd">/mywatchlist</div>
+        <div class="desc">查看我的自選股即時狀態，包含評分與方向</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">⚙️</div>
+      <div>
+        <div class="cmd">/alert [類型] [數字]</div>
+        <div class="desc">設定警報條件</div>
+        <div class="example">/alert foreign 3 &nbsp;（外資連買 3 天通知）<br>/alert pre 70 &nbsp;&nbsp;（評分達 70 分通知）</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 倉位追蹤 -->
+  <h2>📥 倉位追蹤</h2>
+  <div class="tip-box">
+    <div class="tip-icon">🛡️</div>
+    <p>Bot 會自動計算 <strong>止盈（TP）</strong> 和 <strong>止損（SL）</strong>，並在背景每 30 分鐘監控。觸及 TP/SL 時會主動推播通知。</p>
+  </div>
+
+  <h3>流程示範</h3>
+  <div class="tg-mockup">
+    <div class="clearfix">
+      <div class="tg-msg">/enter BTC 95000 l 10</div>
+    </div>
+    <div class="tg-reply">
+      <div class="bold">📥 BTC 進場確認</div>
+      <div>方向：多單 🟢　槓桿：10x</div>
+      <div>進場：$95,000</div>
+      <div class="green">🎯 止盈：$104,500 (+10%)</div>
+      <div class="red">🛡 止損：$90,250 (-5%)</div>
+      <br>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <span style="background:#238636;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.8rem;">✅ 確認進場</span>
+        <span style="background:#21262d;color:#e6edf3;padding:4px 12px;border-radius:6px;font-size:0.8rem;">✏️ 自訂 TP/SL</span>
+        <span style="background:#21262d;color:#e6edf3;padding:4px 12px;border-radius:6px;font-size:0.8rem;">❌ 取消</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="cmd-grid">
+    <div class="cmd-card">
+      <div class="icon">📥</div>
+      <div>
+        <div class="cmd">/enter [代號] [價格] [方向] [槓桿]</div>
+        <div class="desc">記錄進場。方向：l 做多 / s 做空；槓桿預設 1（現貨）</div>
+        <div class="example">/enter BTC 95000 l 10</div>
+        <div class="example">/enter 2330 950</div>
+        <div class="example">/enter NVDA 130 s 3</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📤</div>
+      <div>
+        <div class="cmd">/close [代號] [價格]</div>
+        <div class="desc">手動平倉，Bot 計算盈虧。有多筆時會顯示選擇選單</div>
+        <div class="example">/close BTC 98000</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📊</div>
+      <div>
+        <div class="cmd">/positions</div>
+        <div class="desc">查看我的所有開倉 & 近期平倉紀錄</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">✏️</div>
+      <div>
+        <div class="cmd">/tpsl [代號] [TP] [SL]</div>
+        <div class="desc">自訂止盈止損</div>
+        <div class="example">/tpsl BTC 105000 88000</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 三大指標解說 -->
+  <h2>📡 聰明錢三大指標（/smartmoney）</h2>
+  <div class="indicator-grid">
+    <div class="ind-card">
+      <div class="label">TOP LONG/SHORT RATIO</div>
+      <div class="name">頂級多空比</div>
+      <div class="explain">Binance 前 20% 資金量帳戶中，做多人數與做空人數的比值</div>
+      <div class="bull">▲ &gt;1.3 = 大戶偏多</div>
+      <div class="bear">▼ &lt;0.7 = 大戶偏空</div>
+    </div>
+    <div class="ind-card">
+      <div class="label">POSITION RATIO</div>
+      <div class="name">倉位比</div>
+      <div class="explain">同群大戶，多單持倉量 / 空單持倉量（看「錢」有多少，不只看人數）</div>
+      <div class="bull">▲ &gt;1.15 = 大戶多單佔優</div>
+      <div class="bear">▼ &lt;0.8 = 大戶空單佔優</div>
+    </div>
+    <div class="ind-card">
+      <div class="label">FUNDING RATE</div>
+      <div class="name">資金費率 (FR)</div>
+      <div class="explain">永續合約每 8 小時結算。正值多頭付費，負值空頭付費</div>
+      <div class="bull">▲ FR 負 = 空頭承壓，多頭有利</div>
+      <div class="bear">▼ FR 極正 = 多頭擠擁，注意回調</div>
+    </div>
+  </div>
+
+  <h3>信號解讀</h3>
+  <table>
+    <tr><th>信號</th><th>條件</th><th>意義</th></tr>
+    <tr><td>🐋 機構建多倉</td><td>頂級多空 &gt;1.3 + 倉位比 &gt;1.15 + FR 偏負</td><td>大戶在悄悄建多，可能是提前佈局</td></tr>
+    <tr><td>⚡ 軋空機會</td><td>頂級多空 &lt;0.7 + FR 正值（散戶強多）</td><td>大戶做空 vs 散戶做多，若轉多可能快速軋空</td></tr>
+    <tr><td>💎 多頭優勢</td><td>頂級多空 &gt;1.5 + FR 負（空頭付費）</td><td>大戶偏多且空頭在付費，多頭結構有利</td></tr>
+    <tr><td>🔻 極端空頭</td><td>多空比與倉位比都 &lt;0.8 + FR 負</td><td>全面看空，可能是反向指標或真的走空</td></tr>
+  </table>
+
+  <!-- 評分說明 -->
+  <h2>🏅 評分系統說明</h2>
+  <p style="color:#8b949e;margin-bottom:16px;">每個標的會綜合多個指標計算出一個 0–100 的總分，分數越高代表做多信號越強。</p>
+
+  <h3>加密貨幣評分組成</h3>
+  <table>
+    <tr><th>指標</th><th>說明</th><th>最高分</th></tr>
+    <tr><td>📐 結構分析</td><td>訂單塊（OB）+ 價值缺口（FVG）</td><td>佔 20%</td></tr>
+    <tr><td>📊 RSI</td><td>超賣區反彈潛力</td><td>佔 15%</td></tr>
+    <tr><td>🔔 布林帶</td><td>壓縮蓄勢偵測</td><td>佔 15%</td></tr>
+    <tr><td>💰 Funding Rate</td><td>空頭付費 = 多頭有利</td><td>佔 12%</td></tr>
+    <tr><td>📦 OI 變化</td><td>持倉量增加 + 價格上漲</td><td>佔 10%</td></tr>
+    <tr><td>🐋 頂級多空比</td><td>大戶偏向偵測</td><td>佔 8%</td></tr>
+    <tr><td>其他</td><td>成交量、Taker 比、多空比…</td><td>佔 20%</td></tr>
+  </table>
+
+  <h3>常見 Tag 說明</h3>
+  <div class="tag-row">
+    <span class="tag green">🔋 預備暴漲</span>
+    <span class="tag green">🎯 BB壓縮</span>
+    <span class="tag green">🤝 法人聯手</span>
+    <span class="tag green">💰 FR負值</span>
+    <span class="tag blue">⚡ 軋空機會</span>
+    <span class="tag blue">🏛️ RS領導股</span>
+    <span class="tag yellow">⚠️ 動能轉弱</span>
+    <span class="tag red">⚠️ 預備暴跌</span>
+    <span class="tag red">🔴 RSI過熱</span>
+  </div>
+
+  <!-- 訂閱推播 -->
+  <h2>🔔 自動推播</h2>
+  <div class="cmd-grid">
+    <div class="cmd-card">
+      <div class="icon">🔋</div>
+      <div>
+        <div class="cmd">/sub_pre</div>
+        <div class="desc">訂閱加密預警 — 每 30 分鐘自動推送高評分機會</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🇹🇼</div>
+      <div>
+        <div class="cmd">/tw_sub</div>
+        <div class="desc">訂閱台股早盤預警 — 每天 08:50 推送開盤前機會</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🇺🇸</div>
+      <div>
+        <div class="cmd">/us_sub</div>
+        <div class="desc">訂閱美股盤前預警 — 每天 21:00（台灣時間）推送</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🛑</div>
+      <div>
+        <div class="cmd">/tw_unsub / /us_unsub</div>
+        <div class="desc">取消訂閱對應市場的推播</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 個人化篩選 -->
+  <h2>🎛️ 個人化篩選</h2>
+  <div class="cmd-grid">
+    <div class="cmd-card">
+      <div class="icon">🎚️</div>
+      <div>
+        <div class="cmd">/set_score [數字]</div>
+        <div class="desc">設定總分門檻（預設 55）</div>
+        <div class="example">/set_score 65 （只看 65 分以上）</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🎚️</div>
+      <div>
+        <div class="cmd">/set_early [數字]</div>
+        <div class="desc">設定早期評分門檻（越低 = 越提前佈局）</div>
+        <div class="example">/set_early 30</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">📋</div>
+      <div>
+        <div class="cmd">/myfilters</div>
+        <div class="desc">查看我目前設定的篩選條件</div>
+      </div>
+    </div>
+    <div class="cmd-card">
+      <div class="icon">🔄</div>
+      <div>
+        <div class="cmd">/reset</div>
+        <div class="desc">重設所有篩選條件為預設值</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 注意事項 -->
+  <h2>⚠️ 使用注意事項</h2>
+  <div class="tip-box">
+    <div class="tip-icon">⚠️</div>
+    <p><strong>本 Bot 提供的所有信號僅供參考，不構成投資建議。</strong><br>
+    加密貨幣、台股、美股均有極高風險，請根據自己的風險承受能力做決策，任何交易損失概不負責。</p>
+  </div>
+  <div class="tip-box" style="background:#0d2d0d;border-color:#238636;">
+    <div class="tip-icon">✅</div>
+    <p>首次使用建議：先訂閱 <code>/sub_pre</code> 觀察推播信號幾天，了解 Bot 的篩選邏輯後，再配合 <code>/trade</code> 指令查看具體交易建議。</p>
+  </div>
+
+</div>
+
+<footer>
+  <p>妖幣雷達 V2.3 &nbsp;|&nbsp; 多市場交易機器人使用說明</p>
+  <p style="margin-top:6px;">Powered by Binance API · TWSE · Yahoo Finance</p>
+</footer>
+
+</body>
+</html>

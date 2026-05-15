@@ -1067,7 +1067,10 @@ async def cmd_help(update, ctx):
         "`/us_unsub` 取消美股訂閱\n\n"
         "⚠️ 不構成投資建議，風險自負"
     )
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📖 圖文使用說明", url="https://xiang14786.github.io/yaobi-bot/"),
+    ]])
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
 async def cmd_pre_pump(update, ctx):
     await update.message.reply_text("🔋 偵測蓄勢拉升中...")
