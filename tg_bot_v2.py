@@ -1634,7 +1634,7 @@ async def background_watchlist_monitor(ctx):
 # ============================================================
 # Phase 2 — 倉位追蹤
 # ============================================================
-ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))  # 設在 Fly.io secrets
+ADMIN_ID: int = int(os.getenv("ADMIN_ID", "8370118189"))  # 設在 Fly.io secrets
 
 def _detect_market(symbol: str) -> str:
     """快速判斷市場類型"""
@@ -1643,46 +1643,79 @@ def _detect_market(symbol: str) -> str:
     return "unknown"  # crypto / us 需要掃描確認
 
 def _calc_tp_sl(entry: float, support: float, resistance: float,
-                atr: float, market: str) -> tuple[float, float]:
+                atr: float, market: str,
+                direction: str = "long") -> tuple[float, float]:
     """
-    根據支撐/阻力/ATR 計算 TP/SL。
+    根據支撐/阻力/ATR 計算 TP/SL，支援多空。
     回傳 (tp, sl)
     """
-    if market == "tw":
-        # 台股：TP = 阻力, SL = 支撐（若太近用 ATR）
-        tp = resistance if resistance > entry else entry * 1.08
-        sl = support    if support   < entry else entry * 0.95
-    elif market == "crypto":
-        tp = entry + 2.5 * atr if atr > 0 else entry * 1.12
-        sl = entry - 1.0 * atr if atr > 0 else entry * 0.95
-    else:  # us
-        tp = entry + 2.0 * atr if atr > 0 else entry * 1.10
-        sl = entry - 1.0 * atr if atr > 0 else entry * 0.95
+    if direction == "short":
+        # 空單：TP 在下方，SL 在上方
+        if market == "tw":
+            tp = support     if support < entry else entry * 0.92
+            sl = resistance  if resistance > entry else entry * 1.05
+        elif market == "crypto":
+            tp = entry - 2.5 * atr if atr > 0 else entry * 0.88
+            sl = entry + 1.0 * atr if atr > 0 else entry * 1.05
+        else:
+            tp = entry - 2.0 * atr if atr > 0 else entry * 0.90
+            sl = entry + 1.0 * atr if atr > 0 else entry * 1.05
+    else:
+        # 多單
+        if market == "tw":
+            tp = resistance if resistance > entry else entry * 1.08
+            sl = support    if support   < entry else entry * 0.95
+        elif market == "crypto":
+            tp = entry + 2.5 * atr if atr > 0 else entry * 1.12
+            sl = entry - 1.0 * atr if atr > 0 else entry * 0.95
+        else:
+            tp = entry + 2.0 * atr if atr > 0 else entry * 1.10
+            sl = entry - 1.0 * atr if atr > 0 else entry * 0.95
     return round(tp, 4), round(sl, 4)
 
 def _fmt_position_card(p: dict, current_price: float | None = None) -> str:
-    entry  = p["entry_price"]
-    tp     = p["tp_price"]
-    sl     = p["sl_price"]
+    entry     = p["entry_price"]
+    tp        = p["tp_price"]
+    sl        = p["sl_price"]
+    direction = p.get("direction", "long")
+    leverage  = p.get("leverage", 1)
     market_flag = {"tw": "🇹🇼", "us": "🇺🇸", "crypto": "🪙"}.get(p["market"], "📊")
+    dir_str   = "📈 多" if direction == "long" else "📉 空"
+    lev_str   = f" {leverage}x" if leverage > 1 else " 現貨"
+    tp_pct    = (tp - entry) / entry * 100 * (1 if direction == "long" else -1)
+    sl_pct    = (sl - entry) / entry * 100 * (1 if direction == "long" else -1)
     lines = [
-        f"{market_flag} *{p['symbol']}*  進場 `{entry:.4f}`",
-        f"  TP `{tp:.4f}` (+{(tp-entry)/entry*100:.1f}%)"
-        f"  SL `{sl:.4f}` ({(sl-entry)/entry*100:.1f}%)",
+        f"{market_flag} *{p['symbol']}*  {dir_str}{lev_str}  進場 `{entry:.4f}`",
+        f"  TP `{tp:.4f}` ({tp_pct:+.1f}%)  SL `{sl:.4f}` ({sl_pct:+.1f}%)",
     ]
     if current_price:
         pnl = (current_price - entry) / entry * 100
-        lines.append(f"  現價 `{current_price:.4f}`  損益 `{pnl:+.2f}%`")
+        if direction == "short":
+            pnl = -pnl
+        pnl_lev = pnl * leverage
+        lines.append(f"  現價 `{current_price:.4f}`  損益 `{pnl:+.2f}%`"
+                     + (f"  (帶槓 `{pnl_lev:+.2f}%`)" if leverage > 1 else ""))
     return "\n".join(lines)
 
 
 async def cmd_enter(update, ctx):
-    """/enter BTC 81000  或  /enter 2330 200"""
+    """/enter BTC 81000 [l/s] [槓桿]
+    範例：
+      /enter BTC 81000        現貨多單
+      /enter BTC 81000 l      做多
+      /enter BTC 81000 l 10   做多 10 倍
+      /enter BTC 81000 s      做空
+      /enter BTC 81000 s 5    做空 5 倍
+      /enter 2330 200         台股現貨多單
+    """
     uid = update.effective_user.id
     if len((ctx.args or [])) < 2:
         await update.message.reply_text(
-            "📥 *進場記錄*\n\n用法：`/enter 代號 進場價`\n\n"
-            "範例：\n`/enter BTC 81000`\n`/enter 2330 200`\n`/enter AAPL 195`",
+            "📥 *進場記錄*\n\n"
+            "`/enter BTC 81000`      現貨多單\n"
+            "`/enter BTC 81000 l 10` 做多 10 倍槓桿\n"
+            "`/enter BTC 81000 s 5`  做空 5 倍槓桿\n"
+            "`/enter 2330 200`       台股現貨",
             parse_mode=ParseMode.MARKDOWN)
         return
 
@@ -1693,11 +1726,36 @@ async def cmd_enter(update, ctx):
         await update.message.reply_text("❌ 進場價格格式錯誤", parse_mode=ParseMode.MARKDOWN)
         return
 
-    await update.message.reply_text(f"🔍 分析 {raw_sym} 中，計算建議 TP/SL...")
+    # 解析方向和槓桿
+    direction = "long"
+    leverage  = 1
+    if len(ctx.args) >= 3:
+        d = ctx.args[2].lower()
+        if d in ("s", "short"):
+            direction = "short"
+        elif d in ("l", "long"):
+            direction = "long"
+    if len(ctx.args) >= 4:
+        try:
+            leverage = max(1, int(ctx.args[3]))
+        except ValueError:
+            pass
+
+    # 台股/美股強制多單
+    if _detect_market(raw_sym) in ("tw",) or (
+            not re.match(r'^\d{4,6}[A-Z]?$', raw_sym) and direction == "short"):
+        if _detect_market(raw_sym) == "tw":
+            direction = "long"
+            leverage  = 1
+
+    dir_label = "📈 做多" if direction == "long" else "📉 做空"
+    lev_label = f" {leverage}x 槓桿" if leverage > 1 else " 現貨"
+    await update.message.reply_text(
+        f"🔍 分析 {raw_sym}  {dir_label}{lev_label}，計算建議 TP/SL...")
 
     # 判斷市場並取得指標
     support = resistance = atr = 0.0
-    market = _detect_market(raw_sym)
+    market  = _detect_market(raw_sym)
 
     if market == "tw":
         stocks = await get_tw_scan()
@@ -1712,7 +1770,6 @@ async def cmd_enter(update, ctx):
             resistance = getattr(m, "resistance", entry_price * 1.08)
             atr        = getattr(m, "atr",        entry_price * 0.03)
     else:
-        # 先查加密
         coins = await get_scan()
         mc    = next((c for c in coins if c.base == raw_sym), None)
         if mc:
@@ -1721,7 +1778,6 @@ async def cmd_enter(update, ctx):
             resistance = getattr(mc, "nearest_resistance", entry_price * 1.12) or entry_price * 1.12
             atr        = getattr(mc, "atr",                entry_price * 0.04) or entry_price * 0.04
         else:
-            # 查美股
             us_stocks = await get_us_scan()
             mu = next((s for s in us_stocks if s.ticker == raw_sym), None)
             if mu:
@@ -1730,27 +1786,33 @@ async def cmd_enter(update, ctx):
                 resistance = getattr(mu, "resistance", entry_price * 1.10)
                 atr        = getattr(mu, "atr",        entry_price * 0.03)
             else:
-                await update.message.reply_text(f"❌ 找不到 `{raw_sym}` 的資料", parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(
+                    f"❌ 找不到 `{raw_sym}` 的資料", parse_mode=ParseMode.MARKDOWN)
                 return
 
-    tp, sl = _calc_tp_sl(entry_price, support, resistance, atr, market)
-    rr = (tp - entry_price) / (entry_price - sl) if entry_price - sl > 0 else 0
+    tp, sl = _calc_tp_sl(entry_price, support, resistance, atr, market, direction)
+    tp_pct = abs(tp - entry_price) / entry_price * 100
+    sl_pct = abs(sl - entry_price) / entry_price * 100
+    rr     = tp_pct / sl_pct if sl_pct > 0 else 0
 
     market_flag = {"tw": "🇹🇼", "us": "🇺🇸", "crypto": "🪙"}.get(market, "📊")
+    tp_sign = "+" if direction == "long" else "-"
+    sl_sign = "-" if direction == "long" else "+"
+    lev_note = f"\n槓桿：`{leverage}x`  實際損益 ×{leverage}" if leverage > 1 else ""
     msg = (
-        f"{market_flag} *{raw_sym}* 進場分析\n\n"
-        f"進場價：`{entry_price:.4f}`\n"
-        f"建議 TP：`{tp:.4f}` (+{(tp-entry_price)/entry_price*100:.1f}%)\n"
-        f"建議 SL：`{sl:.4f}` ({(sl-entry_price)/entry_price*100:.1f}%)\n"
-        f"風報比：`{rr:.1f}:1`\n\n"
+        f"{market_flag} *{raw_sym}*  {dir_label}{lev_label}\n\n"
+        f"進場：`{entry_price:.4f}`\n"
+        f"建議 TP：`{tp:.4f}` ({tp_sign}{tp_pct:.1f}%)\n"
+        f"建議 SL：`{sl:.4f}` ({sl_sign}{sl_pct:.1f}%)\n"
+        f"風報比：`{rr:.1f}:1`{lev_note}\n\n"
         f"確認執行嗎？"
     )
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ 依建議執行", callback_data=f"enter:ok:{raw_sym}:{market}:{entry_price}:{tp}:{sl}"),
-            InlineKeyboardButton("❌ 取消",       callback_data="enter:cancel"),
-        ]
-    ])
+    # callback_data: enter:ok:SYM:MKT:ENTRY:TP:SL:DIR:LEV
+    cb = f"enter:ok:{raw_sym}:{market}:{entry_price}:{tp}:{sl}:{direction}:{leverage}"
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ 依建議執行", callback_data=cb),
+        InlineKeyboardButton("❌ 取消",       callback_data="enter:cancel"),
+    ]])
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
 
@@ -1765,17 +1827,20 @@ async def cb_enter(update, ctx):
         await q.edit_message_text("❌ 已取消")
         return
 
-    # enter:ok:SYMBOL:MARKET:ENTRY:TP:SL
-    _, _, symbol, market, entry_s, tp_s, sl_s = data
-    entry = float(entry_s)
-    tp    = float(tp_s)
-    sl    = float(sl_s)
+    # enter:ok:SYM:MKT:ENTRY:TP:SL:DIR:LEV
+    _, _, symbol, market, entry_s, tp_s, sl_s, direction, lev_s = data
+    entry    = float(entry_s)
+    tp       = float(tp_s)
+    sl       = float(sl_s)
+    leverage = int(lev_s)
 
-    pos_id = _db.open_position(uid, symbol, market, entry, tp, sl)
+    pos_id = _db.open_position(uid, symbol, market, entry, tp, sl, direction, leverage)
     market_flag = {"tw": "🇹🇼", "us": "🇺🇸", "crypto": "🪙"}.get(market, "📊")
+    dir_label   = "📈 做多" if direction == "long" else "📉 做空"
+    lev_label   = f" {leverage}x" if leverage > 1 else " 現貨"
     await q.edit_message_text(
         f"✅ 倉位已開啟 #{pos_id}\n\n"
-        f"{market_flag} *{symbol}*\n"
+        f"{market_flag} *{symbol}*  {dir_label}{lev_label}\n"
         f"進場：`{entry:.4f}`\n"
         f"TP：`{tp:.4f}`  SL：`{sl:.4f}`\n\n"
         f"背景每 30 分鐘自動追蹤，觸及 TP/SL 時通知你\n"

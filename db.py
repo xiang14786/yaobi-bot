@@ -29,19 +29,21 @@ def init_db():
     with _conn() as c:
         c.executescript("""
             CREATE TABLE IF NOT EXISTS positions (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id      INTEGER NOT NULL,
-                symbol       TEXT    NOT NULL,
-                market       TEXT    NOT NULL,   -- tw / us / crypto
-                entry_price  REAL    NOT NULL,
-                entry_time   TEXT    NOT NULL,
-                tp_price     REAL,
-                sl_price     REAL,
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       INTEGER NOT NULL,
+                symbol        TEXT    NOT NULL,
+                market        TEXT    NOT NULL,   -- tw / us / crypto
+                direction     TEXT    DEFAULT 'long',  -- long / short
+                leverage      INTEGER DEFAULT 1,        -- 1 = 現貨
+                entry_price   REAL    NOT NULL,
+                entry_time    TEXT    NOT NULL,
+                tp_price      REAL,
+                sl_price      REAL,
                 highest_price REAL,              -- trailing stop 用
-                status       TEXT    DEFAULT 'open',  -- open / closed
-                close_price  REAL,
-                close_time   TEXT,
-                pnl_pct      REAL
+                status        TEXT    DEFAULT 'open',  -- open / closed
+                close_price   REAL,
+                close_time    TEXT,
+                pnl_pct       REAL
             );
             CREATE TABLE IF NOT EXISTS watchlists (
                 user_id  INTEGER NOT NULL,
@@ -102,15 +104,18 @@ def save_alert_condition(user_id: int, key: str, val: int):
 
 # ── 倉位 ─────────────────────────────────────────
 def open_position(user_id: int, symbol: str, market: str,
-                  entry_price: float, tp: float, sl: float) -> int:
+                  entry_price: float, tp: float, sl: float,
+                  direction: str = "long", leverage: int = 1) -> int:
     """開倉，回傳 position id"""
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     with _conn() as c:
         cur = c.execute("""
             INSERT INTO positions
-              (user_id, symbol, market, entry_price, entry_time, tp_price, sl_price, highest_price)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, symbol, market, entry_price, now, tp, sl, entry_price))
+              (user_id, symbol, market, direction, leverage,
+               entry_price, entry_time, tp_price, sl_price, highest_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, symbol, market, direction, leverage,
+              entry_price, now, tp, sl, entry_price))
         return cur.lastrowid
 
 
