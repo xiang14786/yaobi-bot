@@ -1486,7 +1486,7 @@ async def cb_sub_toggle(update, ctx):
     """切換單項訂閱"""
     query = update.callback_query
     await query.answer()
-    cid = query.from_user.id
+    cid = query.message.chat_id   # 用 chat_id：群組訂閱送群組，私聊訂閱送私聊
     channel = query.data.split(":")[2]
 
     _map = {
@@ -1521,7 +1521,7 @@ async def cb_sub_unsub_all(update, ctx):
     """取消全部訂閱"""
     query = update.callback_query
     await query.answer("已取消全部訂閱")
-    cid = query.from_user.id
+    cid = query.message.chat_id   # 用 chat_id，與 cb_sub_toggle 一致
     for subs in (SUBSCRIBERS, PRE_PUMP_SUBSCRIBERS, TW_SUBSCRIBERS, US_SUBSCRIBERS):
         subs.discard(cid)
     for ch in ("general", "pre_pump", "tw", "us"):
@@ -1590,6 +1590,9 @@ from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 _CST = _tz(_td(hours=8))   # 台灣時區
 _TW_LAST = 0.0
 _US_LAST = 0.0
+_TW_RUNNING = False
+_US_RUNNING = False
+_CRYPTO_RUNNING = False
 
 def _tw_in_market() -> bool:
     """台股市場時段：週一~五 08:00~13:30 CST"""
