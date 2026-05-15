@@ -1091,17 +1091,7 @@ _HELP_SECTIONS = {
         "`/positions` 查看開倉 & 近期平倉紀錄\n"
         "`/tpsl BTC 105000 88000` 自訂止盈止損"
     ),
-    "sub": (
-        "*🔔 訂閱推播*\n\n"
-        "`/sub_pre` 加密預警（每 30 分鐘推送）\n"
-        "`/tw_sub` 台股早盤預警（每日 08:50）\n"
-        "`/us_sub` 美股盤前預警（每日 20:30）\n"
-        "`/unsub_all` 取消全部訂閱\n\n"
-        "*📡 TradingView Webhook*\n"
-        "`/sub_tv` 訂閱 TV 警報信號\n"
-        "`/unsub_tv` 取消 TV 訂閱\n"
-        "`/tv_status` Webhook 狀態"
-    ),
+    "sub": "sub_panel",   # 特殊標記，改用訂閱面板
 }
 
 def _help_menu_keyboard():
@@ -1126,7 +1116,7 @@ def _help_menu_keyboard():
 
 async def cmd_help(update, ctx):
     await update.message.reply_text(
-        "*🤖 妖幣雷達 V2.3*\n選擇想查看的分類：",
+        "*🤖 妖幣雷達 V2.3*\n選擇想查看的分類：\n\n💡 指令底線可省略，例如 `/twscan` = `/tw\_scan`",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_help_menu_keyboard()
     )
@@ -1136,6 +1126,14 @@ async def cb_help_section(update, ctx):
     query = update.callback_query
     await query.answer()
     key = query.data.split(":")[1]
+    # 訂閱類別 → 直接顯示訂閱面板
+    if key == "sub":
+        cid = query.from_user.id
+        await query.edit_message_text(
+            _sub_text(cid), parse_mode=ParseMode.MARKDOWN,
+            reply_markup=_sub_keyboard_with_back(cid)
+        )
+        return
     text = _HELP_SECTIONS.get(key, "❌ 未知分類")
     back_kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("◀️ 返回選單", callback_data="help:menu")
@@ -1374,7 +1372,9 @@ async def cmd_set_score(update, ctx):
         v = float(ctx.args[0]); assert 30 <= v <= 95
     except:
         await update.message.reply_text("用法: `/set_score 60`", parse_mode=ParseMode.MARKDOWN); return
-    USER_FILTERS.setdefault(update.effective_user.id, {})["min_total_score"] = v
+    uid = update.effective_user.id
+    USER_FILTERS.setdefault(uid, {})["min_total_score"] = v
+    _db.save_user_filter(uid, "crypto", USER_FILTERS[uid])
     await update.message.reply_text(f"✅ 最低總分 = {v}")
 
 async def cmd_set_early(update, ctx):
@@ -1382,7 +1382,9 @@ async def cmd_set_early(update, ctx):
         v = float(ctx.args[0]); assert 0 <= v <= 95
     except:
         await update.message.reply_text("用法: `/set_early 50`", parse_mode=ParseMode.MARKDOWN); return
-    USER_FILTERS.setdefault(update.effective_user.id, {})["min_early_score"] = v
+    uid = update.effective_user.id
+    USER_FILTERS.setdefault(uid, {})["min_early_score"] = v
+    _db.save_user_filter(uid, "crypto", USER_FILTERS[uid])
     await update.message.reply_text(f"✅ 最低早期分 = {v}")
 
 async def cmd_set_max_change(update, ctx):
@@ -1390,7 +1392,9 @@ async def cmd_set_max_change(update, ctx):
         v = float(ctx.args[0]); assert 1 <= v <= 50
     except:
         await update.message.reply_text("用法: `/set_max_change 12`", parse_mode=ParseMode.MARKDOWN); return
-    USER_FILTERS.setdefault(update.effective_user.id, {})["max_price_change_pct"] = v
+    uid = update.effective_user.id
+    USER_FILTERS.setdefault(uid, {})["max_price_change_pct"] = v
+    _db.save_user_filter(uid, "crypto", USER_FILTERS[uid])
     await update.message.reply_text(f"✅ 最大已動幅度 = {v}%")
 
 async def cmd_myfilters(update, ctx):
@@ -1406,19 +1410,21 @@ async def cmd_myfilters(update, ctx):
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_reset(update, ctx):
-    USER_FILTERS.pop(update.effective_user.id, None)
-    await update.message.reply_text("✅ 已重設")
+    uid = update.effective_user.id
+    USER_FILTERS.pop(uid, None)
+    _db.delete_user_filter(uid, "crypto")
+    await update.message.reply_text("✅ 已重設為預設值")
 
 # ============================================================
 # 訂閱
 # ============================================================
 # ── 訂閱管理面板 ──────────────────────────────────────────
-def _sub_keyboard(cid: int) -> InlineKeyboardMarkup:
+def _sub_keyboard(cid: int, show_back: bool = False) -> InlineKeyboardMarkup:
     """產生訂閱面板 InlineKeyboard，已訂閱顯示 ✅"""
     def _btn(label, channel, subscribers):
         icon = "✅" if cid in subscribers else "☐"
         return InlineKeyboardButton(f"{icon} {label}", callback_data=f"sub:toggle:{channel}")
-    return InlineKeyboardMarkup([
+    rows = [
         [
             _btn("加密預警 (30分)", "pre_pump", PRE_PUMP_SUBSCRIBERS),
             _btn("榜單推送 (1小時)", "general",  SUBSCRIBERS),
@@ -1428,7 +1434,13 @@ def _sub_keyboard(cid: int) -> InlineKeyboardMarkup:
             _btn("美股盤前 (20:30)", "us", US_SUBSCRIBERS),
         ],
         [InlineKeyboardButton("🔕 取消全部", callback_data="sub:unsub_all")],
-    ])
+    ]
+    if show_back:
+        rows.append([InlineKeyboardButton("◀️ 返回選單", callback_data="help:menu")])
+    return InlineKeyboardMarkup(rows)
+
+def _sub_keyboard_with_back(cid: int) -> InlineKeyboardMarkup:
+    return _sub_keyboard(cid, show_back=True)
 
 def _sub_text(cid: int) -> str:
     lines = ["*🔔 訂閱管理*", "點選按鈕切換訂閱狀態：", ""]
@@ -1493,9 +1505,16 @@ async def cb_sub_toggle(update, ctx):
         subs.add(cid)
         _db.save_subscriber(channel, cid)
 
+    # 判斷是否從 help 進入（訊息有返回按鈕）
+    msg = query.message
+    has_back = any(
+        btn.callback_data == "help:menu"
+        for row in (msg.reply_markup.inline_keyboard if msg.reply_markup else [])
+        for btn in row
+    )
     await query.edit_message_text(
         _sub_text(cid), parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_sub_keyboard(cid)
+        reply_markup=_sub_keyboard(cid, show_back=has_back)
     )
 
 async def cb_sub_unsub_all(update, ctx):
@@ -2861,6 +2880,7 @@ async def post_init(app):
     PRE_PUMP_SUBSCRIBERS.update(_subs["pre_pump"])
     TW_SUBSCRIBERS.update(_subs["tw"])
     US_SUBSCRIBERS.update(_subs["us"])
+    USER_FILTERS.update(_db.load_user_filters("crypto"))
     log.info(f"[DB] 載入自選股 {sum(len(v) for v in WATCHLISTS.values())} 筆，"
              f"警報設定 {len(WATCH_CONDITIONS)} 用戶，"
              f"訂閱 general={len(SUBSCRIBERS)} pre={len(PRE_PUMP_SUBSCRIBERS)} "
@@ -3029,6 +3049,37 @@ def main():
         ("enter",          cmd_enter),
         ("close",          cmd_close),
         ("positions",      cmd_positions),
+        # ── 無底線別名（方便手機輸入）──
+        ("prepump",        cmd_pre_pump),
+        ("predump",        cmd_pre_dump),
+        ("twscan",         cmd_tw_scan),
+        ("twsqueeze",      cmd_tw_squeeze),
+        ("twforeign",      cmd_tw_foreign),
+        ("twtop10",        cmd_tw_top10),
+        ("twtrade",        cmd_tw_trade),
+        ("twdetail",       cmd_tw_detail),
+        ("twstatus",       cmd_tw_status),
+        ("twsub",          cmd_tw_sub),
+        ("twunsub",        cmd_tw_unsub),
+        ("twjoint",        cmd_tw_joint),
+        ("usscan",         cmd_us_scan),
+        ("ussqueeze",      cmd_us_squeeze),
+        ("usshort",        cmd_us_short),
+        ("usmomentum",     cmd_us_momentum),
+        ("ustop10",        cmd_us_top10),
+        ("ustrade",        cmd_us_trade),
+        ("usdetail",       cmd_us_detail),
+        ("usstatus",       cmd_us_status),
+        ("ussub",          cmd_us_sub),
+        ("usunsub",        cmd_us_unsub),
+        ("usrs",           cmd_us_rs),
+        ("usaccum",        cmd_us_accum),
+        ("setscore",       cmd_set_score),
+        ("setearly",       cmd_set_early),
+        ("setmax",         cmd_set_max_change),
+        ("subpre",         cmd_sub_pre),
+        ("unsuball",       cmd_unsub_all),
+        ("mywatchlist",    cmd_mywatchlist),
         ("tpsl",           cmd_tpsl),
     ]
     for name, fn in cmds:
