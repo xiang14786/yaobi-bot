@@ -2748,4 +2748,10 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        print(f"[FATAL] Bot 啟動失敗: {e}", flush=True)
+        traceback.print_exc()
+        raise SystemExit(1)
