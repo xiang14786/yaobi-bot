@@ -26,11 +26,12 @@ import os
 import re
 import time
 from datetime import datetime, time as dtime, timezone, timedelta
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes,
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
 )
+import db as _db
 from yaobi_scorer_v2 import (
     fetch_all_metrics_v2, apply_filters_v2,
     find_pre_pump, find_pre_dump, find_squeeze,
@@ -108,6 +109,21 @@ US_USER_FILTERS: dict = {}
 US_MARKET_OPEN  = dtime(9, 30)
 US_MARKET_CLOSE = dtime(16, 0)
 ET_TZ = timezone(timedelta(hours=-4))  # EDT（夏令時）
+
+# ============================================================
+# Phase 3: 自選股 & 警報
+# ============================================================
+# WATCHLISTS[user_id] = {"2330", "BTC", "AAPL", ...}
+WATCHLISTS: dict[int, set] = {}
+
+# WATCH_CONDITIONS[user_id] = {
+#   "foreign_streak": 3,   # 外資連買 ≥ N 天才推送
+#   "pre_warn_pct":   70,  # 評分達到滿分 X% 就預警
+# }
+WATCH_CONDITIONS: dict[int, dict] = {}
+
+# 紀錄已推送過的警報（避免重複）key = (user_id, symbol, alert_type)
+_SENT_ALERTS: set = set()
 
 # ============================================================
 # 共用
@@ -1309,6 +1325,713 @@ async def background_crypto_scan(ctx):
         log.error(f"[背景] 加密掃描失敗: {e}")
 
 # ============================================================
+# Phase 3 — 4H 加密信號（Binance 免費 API）
+# ============================================================
+async def fetch_4h_signal(base: str) -> str:
+    """
+    從 Binance 抓 4H K 線，判斷 4H 方向與日線是否同向。
+    回傳文字描述，供卡片追加顯示。
+    """
+    import aiohttp as _aio
+    symbol = f"{base}USDT"
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=4h&limit=20"
+    try:
+        async with _aio.ClientSession() as s:
+            async with s.get(url, timeout=_aio.ClientTimeout(total=8)) as r:
+                if r.status != 200:
+                    return ""
+                klines = await r.json()
+        if len(klines) < 10:
+            return ""
+        closes = [float(k[4]) for k in klines]
+        # EMA5 vs EMA10 on 4H
+        def ema(data, n):
+            k = 2 / (n + 1)
+            e = data[0]
+            for v in data[1:]:
+                e = v * k + e * (1 - k)
+            return e
+        ema5  = ema(closes[-10:], 5)
+        ema10 = ema(closes[-10:], 10)
+        last  = closes[-1]
+        prev  = closes[-2]
+        pct4h = (last - prev) / prev * 100 if prev > 0 else 0
+        if ema5 > ema10 and pct4h >= 0:
+            return f"📶 4H 多頭排列 {pct4h:+.2f}%  ✅ 與日線同向"
+        elif ema5 < ema10 and pct4h < 0:
+            return f"📉 4H 空頭排列 {pct4h:+.2f}%  ⚠️ 趨勢一致偏空"
+        else:
+            return f"↔️ 4H 盤整 {pct4h:+.2f}%"
+    except Exception:
+        return ""
+
+
+# ============================================================
+# Phase 3 — 自選股指令
+# ============================================================
+async def cmd_watch(update, ctx):
+    """/watch 2330 | /watch BTC | /watch AAPL — 加入自選股"""
+    uid = update.effective_user.id
+    if not ctx.args:
+        wl = WATCHLISTS.get(uid, set())
+        if not wl:
+            await update.message.reply_text(
+                "📋 *自選股清單*\n\n（空的）\n\n用 `/watch 2330` 加入台股\n"
+                "用 `/watch BTC` 加入加密\n用 `/watch AAPL` 加入美股",
+                parse_mode=ParseMode.MARKDOWN)
+        else:
+            lines = "\n".join(f"• `{s}`" for s in sorted(wl))
+            await update.message.reply_text(
+                f"📋 *你的自選股*\n\n{lines}\n\n"
+                f"用 `/unwatch 代號` 移除",
+                parse_mode=ParseMode.MARKDOWN)
+        return
+    sym = ctx.args[0].strip().upper().replace("USDT", "")
+    # 若非台股，檢查是否有市場衝突
+    if not re.match(r'^\d{4,6}[A-Z]?$', sym):
+        market = await _resolve_market_conflict(update, sym, "watch")
+        if market is None:
+            return   # 已發送選擇鍵盤
+    WATCHLISTS.setdefault(uid, set()).add(sym)
+    _db.save_watch(uid, sym)
+    await update.message.reply_text(
+        f"✅ 已加入自選股：`{sym}`\n"
+        f"背景每 30 分鐘會自動監控並在條件成立時通知你\n\n"
+        f"用 `/alert` 設定警報條件",
+        parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_unwatch(update, ctx):
+    """/unwatch 2330 — 移除自選股"""
+    uid = update.effective_user.id
+    if not ctx.args:
+        await update.message.reply_text("用法：`/unwatch 2330`", parse_mode=ParseMode.MARKDOWN)
+        return
+    sym = ctx.args[0].strip().upper().replace("USDT", "")
+    wl  = WATCHLISTS.get(uid, set())
+    if sym in wl:
+        wl.discard(sym)
+        _db.delete_watch(uid, sym)
+        await update.message.reply_text(f"🗑 已移除：`{sym}`", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(f"❌ `{sym}` 不在你的自選股中", parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_mywatchlist(update, ctx):
+    """/mywatchlist — 顯示自選股並附上即時狀態"""
+    uid = update.effective_user.id
+    wl  = WATCHLISTS.get(uid, set())
+    if not wl:
+        await update.message.reply_text(
+            "📋 自選股清單是空的\n用 `/watch 2330` 加入", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    await update.message.reply_text("🔍 掃描自選股中...")
+    lines = [f"📋 *你的自選股即時狀態*\n"]
+    tw_stocks  = await get_tw_scan()
+    us_stocks  = await get_us_scan()
+    coins      = await get_scan()
+
+    for sym in sorted(wl):
+        # 台股
+        if re.match(r'^\d{4,6}[A-Z]?$', sym):
+            m = next((s for s in tw_stocks if s.stock_id == sym), None)
+            if not m:
+                try:
+                    m = await asyncio.wait_for(fetch_single_tw_metrics(sym), timeout=30)
+                except Exception:
+                    m = None
+            if m:
+                streak = int(m.foreign_streak) if m.foreign_streak else 0
+                lines.append(
+                    f"🇹🇼 *{sym} {m.name}*  {m.direction}\n"
+                    f"  收盤 `{m.close:.2f}`  漲跌 `{m.change_pct:+.2f}%`\n"
+                    f"  外資連續 `{streak:+d}天`  總分 `{m.total_score:.0f}`\n"
+                )
+            else:
+                lines.append(f"🇹🇼 *{sym}*  _資料不足_\n")
+            continue
+        # 加密
+        mc = next((c for c in coins if c.base == sym), None)
+        if mc:
+            lines.append(
+                f"🪙 *{sym}/USDT*  {mc.direction}\n"
+                f"  價格 `${mc.last_price:,.4f}`  24h `{mc.price_change_pct:+.2f}%`\n"
+                f"  總分 `{mc.total_score:.0f}`  信心 `{mc.confidence:.0%}`\n"
+            )
+            continue
+        # 美股
+        mu = next((s for s in us_stocks if s.ticker == sym), None)
+        if mu:
+            lines.append(
+                f"🇺🇸 *{sym}*  {mu.direction}\n"
+                f"  收盤 `${mu.close:.2f}`  漲跌 `{mu.change_pct:+.2f}%`\n"
+                f"  總分 `{mu.total_score:.0f}`  信心 `{mu.confidence:.0%}`\n"
+            )
+        else:
+            lines.append(f"❓ *{sym}*  _找不到資料_\n")
+
+    cond = WATCH_CONDITIONS.get(uid, {})
+    cond_txt = (
+        f"\n⚙️ *警報設定*\n"
+        f"外資連買 ≥ `{cond.get('foreign_streak', 3)}天`\n"
+        f"評分預警 ≥ `{cond.get('pre_warn_pct', 70)}%`\n"
+        f"\n用 `/alert` 修改警報條件"
+    )
+    await update.message.reply_text(
+        "\n".join(lines) + cond_txt,
+        parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_alert(update, ctx):
+    """/alert — 查看或設定警報條件
+    用法：
+      /alert               查看目前設定
+      /alert foreign 3     外資連買 ≥ 3 天才推送
+      /alert pre 75        評分達到 75% 時預警
+    """
+    uid  = update.effective_user.id
+    cond = WATCH_CONDITIONS.setdefault(uid, {"foreign_streak": 3, "pre_warn_pct": 70})
+
+    if not ctx.args:
+        await update.message.reply_text(
+            f"⚙️ *你的警報設定*\n\n"
+            f"外資連買門檻：`{cond['foreign_streak']} 天`\n"
+            f"評分預警門檻：`{cond['pre_warn_pct']}%`\n\n"
+            f"修改範例：\n"
+            f"`/alert foreign 5`  → 外資連買 ≥ 5 天\n"
+            f"`/alert pre 80`     → 評分達 80% 才預警",
+            parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if len(ctx.args) < 2:
+        await update.message.reply_text("用法：`/alert foreign 3` 或 `/alert pre 75`",
+                                        parse_mode=ParseMode.MARKDOWN)
+        return
+
+    key, val_str = ctx.args[0].lower(), ctx.args[1]
+    try:
+        val = int(val_str)
+    except ValueError:
+        await update.message.reply_text("數值請輸入整數", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if key in ("foreign", "外資"):
+        cond["foreign_streak"] = max(1, val)
+        _db.save_alert_condition(uid, "foreign_streak", cond["foreign_streak"])
+        await update.message.reply_text(
+            f"✅ 外資連買門檻設為 `{cond['foreign_streak']} 天`",
+            parse_mode=ParseMode.MARKDOWN)
+    elif key in ("pre", "預警"):
+        cond["pre_warn_pct"] = max(50, min(95, val))
+        _db.save_alert_condition(uid, "pre_warn_pct", cond["pre_warn_pct"])
+        await update.message.reply_text(
+            f"✅ 評分預警門檻設為 `{cond['pre_warn_pct']}%`",
+            parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(
+            "未知設定\n`/alert foreign 3` 或 `/alert pre 75`",
+            parse_mode=ParseMode.MARKDOWN)
+
+
+# ============================================================
+# Phase 3 — 背景自選股監控（每 30 分鐘）
+# ============================================================
+async def background_watchlist_monitor(ctx):
+    """每 30 分鐘掃描所有用戶的自選股，觸發條件時推送通知"""
+    if not WATCHLISTS:
+        return
+
+    # 取得各市場資料（共用快取，不重複抓）
+    try:
+        tw_stocks = await get_tw_scan()
+        us_stocks = await get_us_scan()
+        coins     = await get_scan()
+    except Exception as e:
+        log.error(f"[Watchlist] 掃描失敗: {e}")
+        return
+
+    # 定義「評分滿分」基準（台股/美股/加密各自不同）
+    TW_MAX_SCORE = 100.0
+    US_MAX_SCORE = 100.0
+    CRYPTO_MAX   = 100.0
+
+    for uid, wl in WATCHLISTS.items():
+        cond = WATCH_CONDITIONS.get(uid, {"foreign_streak": 3, "pre_warn_pct": 70})
+        streak_min  = cond.get("foreign_streak", 3)
+        pre_warn    = cond.get("pre_warn_pct", 70) / 100
+
+        alerts = []
+
+        for sym in wl:
+            # ── 台股 ──
+            if re.match(r'^\d{4,6}[A-Z]?$', sym):
+                m = next((s for s in tw_stocks if s.stock_id == sym), None)
+                if not m:
+                    continue
+                streak = int(m.foreign_streak) if m.foreign_streak else 0
+                score_pct = m.total_score / TW_MAX_SCORE
+
+                # 外資連買警報
+                key_streak = (uid, sym, "foreign_streak")
+                if streak >= streak_min and key_streak not in _SENT_ALERTS:
+                    _SENT_ALERTS.add(key_streak)
+                    alerts.append(
+                        f"🏦 *{sym} {m.name}* 外資連買 `{streak}天`\n"
+                        f"   收盤 `{m.close:.2f}`  法人合計 `{m.institutional_net/1e8:+.2f}億`"
+                    )
+                elif streak < streak_min:
+                    _SENT_ALERTS.discard(key_streak)
+
+                # 預警：評分達到門檻但未達到「完全啟動」
+                key_pre = (uid, sym, "pre_warn")
+                if pre_warn <= score_pct < 0.90 and key_pre not in _SENT_ALERTS:
+                    _SENT_ALERTS.add(key_pre)
+                    alerts.append(
+                        f"⚡ *{sym} {m.name}* 評分預警 `{m.total_score:.0f}分`（{score_pct:.0%}）\n"
+                        f"   {m.direction}  漲跌 `{m.change_pct:+.2f}%`"
+                    )
+                elif score_pct < pre_warn:
+                    _SENT_ALERTS.discard(key_pre)
+
+            # ── 加密 ──
+            elif mc := next((c for c in coins if c.base == sym), None):
+                score_pct = mc.total_score / CRYPTO_MAX
+                key_pre   = (uid, sym, "pre_warn")
+                if pre_warn <= score_pct < 0.90 and key_pre not in _SENT_ALERTS:
+                    _SENT_ALERTS.add(key_pre)
+                    alerts.append(
+                        f"⚡ *{sym}/USDT* 評分預警 `{mc.total_score:.0f}分`（{score_pct:.0%}）\n"
+                        f"   {mc.direction}  價格 `${mc.last_price:,.4f}`"
+                    )
+                elif score_pct < pre_warn:
+                    _SENT_ALERTS.discard(key_pre)
+
+            # ── 美股 ──
+            elif mu := next((s for s in us_stocks if s.ticker == sym), None):
+                score_pct = mu.total_score / US_MAX_SCORE
+                key_pre   = (uid, sym, "pre_warn")
+                if pre_warn <= score_pct < 0.90 and key_pre not in _SENT_ALERTS:
+                    _SENT_ALERTS.add(key_pre)
+                    alerts.append(
+                        f"⚡ *{sym}* 評分預警 `{mu.total_score:.0f}分`（{score_pct:.0%}）\n"
+                        f"   {mu.direction}  收盤 `${mu.close:.2f}`"
+                    )
+                elif score_pct < pre_warn:
+                    _SENT_ALERTS.discard(key_pre)
+
+        if alerts:
+            header = f"🔔 *自選股警報*（{datetime.now(TW_TZ).strftime('%m/%d %H:%M')} 台時）\n\n"
+            msg    = header + "\n\n".join(alerts)
+            msg   += "\n\n用 `/mywatchlist` 查看完整狀態"
+            try:
+                await ctx.bot.send_message(uid, msg, parse_mode=ParseMode.MARKDOWN)
+                log.info(f"[Watchlist] 推送 {len(alerts)} 條警報給 user {uid}")
+            except Exception as e:
+                log.error(f"[Watchlist] 推送失敗 uid={uid}: {e}")
+
+
+# ============================================================
+# Phase 2 — 倉位追蹤
+# ============================================================
+ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))  # 設在 Fly.io secrets
+
+def _detect_market(symbol: str) -> str:
+    """快速判斷市場類型"""
+    if re.match(r'^\d{4,6}[A-Z]?$', symbol):
+        return "tw"
+    return "unknown"  # crypto / us 需要掃描確認
+
+def _calc_tp_sl(entry: float, support: float, resistance: float,
+                atr: float, market: str) -> tuple[float, float]:
+    """
+    根據支撐/阻力/ATR 計算 TP/SL。
+    回傳 (tp, sl)
+    """
+    if market == "tw":
+        # 台股：TP = 阻力, SL = 支撐（若太近用 ATR）
+        tp = resistance if resistance > entry else entry * 1.08
+        sl = support    if support   < entry else entry * 0.95
+    elif market == "crypto":
+        tp = entry + 2.5 * atr if atr > 0 else entry * 1.12
+        sl = entry - 1.0 * atr if atr > 0 else entry * 0.95
+    else:  # us
+        tp = entry + 2.0 * atr if atr > 0 else entry * 1.10
+        sl = entry - 1.0 * atr if atr > 0 else entry * 0.95
+    return round(tp, 4), round(sl, 4)
+
+def _fmt_position_card(p: dict, current_price: float | None = None) -> str:
+    entry  = p["entry_price"]
+    tp     = p["tp_price"]
+    sl     = p["sl_price"]
+    market_flag = {"tw": "🇹🇼", "us": "🇺🇸", "crypto": "🪙"}.get(p["market"], "📊")
+    lines = [
+        f"{market_flag} *{p['symbol']}*  進場 `{entry:.4f}`",
+        f"  TP `{tp:.4f}` (+{(tp-entry)/entry*100:.1f}%)"
+        f"  SL `{sl:.4f}` ({(sl-entry)/entry*100:.1f}%)",
+    ]
+    if current_price:
+        pnl = (current_price - entry) / entry * 100
+        lines.append(f"  現價 `{current_price:.4f}`  損益 `{pnl:+.2f}%`")
+    return "\n".join(lines)
+
+
+async def cmd_enter(update, ctx):
+    """/enter BTC 81000  或  /enter 2330 200"""
+    uid = update.effective_user.id
+    if len((ctx.args or [])) < 2:
+        await update.message.reply_text(
+            "📥 *進場記錄*\n\n用法：`/enter 代號 進場價`\n\n"
+            "範例：\n`/enter BTC 81000`\n`/enter 2330 200`\n`/enter AAPL 195`",
+            parse_mode=ParseMode.MARKDOWN)
+        return
+
+    raw_sym = ctx.args[0].strip().upper().replace("USDT", "")
+    try:
+        entry_price = float(ctx.args[1].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("❌ 進場價格格式錯誤", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    await update.message.reply_text(f"🔍 分析 {raw_sym} 中，計算建議 TP/SL...")
+
+    # 判斷市場並取得指標
+    support = resistance = atr = 0.0
+    market = _detect_market(raw_sym)
+
+    if market == "tw":
+        stocks = await get_tw_scan()
+        m = next((s for s in stocks if s.stock_id == raw_sym), None)
+        if not m:
+            try:
+                m = await asyncio.wait_for(fetch_single_tw_metrics(raw_sym), timeout=40)
+            except Exception:
+                m = None
+        if m:
+            support    = getattr(m, "support",    entry_price * 0.95)
+            resistance = getattr(m, "resistance", entry_price * 1.08)
+            atr        = getattr(m, "atr",        entry_price * 0.03)
+    else:
+        # 先查加密
+        coins = await get_scan()
+        mc    = next((c for c in coins if c.base == raw_sym), None)
+        if mc:
+            market     = "crypto"
+            support    = getattr(mc, "nearest_support",    entry_price * 0.95) or entry_price * 0.95
+            resistance = getattr(mc, "nearest_resistance", entry_price * 1.12) or entry_price * 1.12
+            atr        = getattr(mc, "atr",                entry_price * 0.04) or entry_price * 0.04
+        else:
+            # 查美股
+            us_stocks = await get_us_scan()
+            mu = next((s for s in us_stocks if s.ticker == raw_sym), None)
+            if mu:
+                market     = "us"
+                support    = getattr(mu, "support",    entry_price * 0.95)
+                resistance = getattr(mu, "resistance", entry_price * 1.10)
+                atr        = getattr(mu, "atr",        entry_price * 0.03)
+            else:
+                await update.message.reply_text(f"❌ 找不到 `{raw_sym}` 的資料", parse_mode=ParseMode.MARKDOWN)
+                return
+
+    tp, sl = _calc_tp_sl(entry_price, support, resistance, atr, market)
+    rr = (tp - entry_price) / (entry_price - sl) if entry_price - sl > 0 else 0
+
+    market_flag = {"tw": "🇹🇼", "us": "🇺🇸", "crypto": "🪙"}.get(market, "📊")
+    msg = (
+        f"{market_flag} *{raw_sym}* 進場分析\n\n"
+        f"進場價：`{entry_price:.4f}`\n"
+        f"建議 TP：`{tp:.4f}` (+{(tp-entry_price)/entry_price*100:.1f}%)\n"
+        f"建議 SL：`{sl:.4f}` ({(sl-entry_price)/entry_price*100:.1f}%)\n"
+        f"風報比：`{rr:.1f}:1`\n\n"
+        f"確認執行嗎？"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ 依建議執行", callback_data=f"enter:ok:{raw_sym}:{market}:{entry_price}:{tp}:{sl}"),
+            InlineKeyboardButton("❌ 取消",       callback_data="enter:cancel"),
+        ]
+    ])
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+
+
+async def cb_enter(update, ctx):
+    """處理 /enter 的 InlineKeyboard 回調"""
+    q    = update.callback_query
+    await q.answer()
+    uid  = q.from_user.id
+    data = q.data.split(":")
+
+    if data[1] == "cancel":
+        await q.edit_message_text("❌ 已取消")
+        return
+
+    # enter:ok:SYMBOL:MARKET:ENTRY:TP:SL
+    _, _, symbol, market, entry_s, tp_s, sl_s = data
+    entry = float(entry_s)
+    tp    = float(tp_s)
+    sl    = float(sl_s)
+
+    pos_id = _db.open_position(uid, symbol, market, entry, tp, sl)
+    market_flag = {"tw": "🇹🇼", "us": "🇺🇸", "crypto": "🪙"}.get(market, "📊")
+    await q.edit_message_text(
+        f"✅ 倉位已開啟 #{pos_id}\n\n"
+        f"{market_flag} *{symbol}*\n"
+        f"進場：`{entry:.4f}`\n"
+        f"TP：`{tp:.4f}`  SL：`{sl:.4f}`\n\n"
+        f"背景每 30 分鐘自動追蹤，觸及 TP/SL 時通知你\n"
+        f"用 `/close {symbol}` 手動平倉",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def cmd_close(update, ctx):
+    """/close BTC [平倉價格（可選）]"""
+    uid = update.effective_user.id
+    if not ctx.args:
+        await update.message.reply_text("用法：`/close BTC` 或 `/close BTC 82000`",
+                                        parse_mode=ParseMode.MARKDOWN)
+        return
+    symbol = ctx.args[0].strip().upper().replace("USDT", "")
+    pos    = _db.get_position_by_symbol(uid, symbol)
+    if not pos:
+        await update.message.reply_text(f"❌ 找不到 `{symbol}` 的開倉紀錄",
+                                        parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # 取得平倉價格（手動輸入或從快取取現價）
+    if len(ctx.args) >= 2:
+        try:
+            close_price = float(ctx.args[1].replace(",", ""))
+        except ValueError:
+            await update.message.reply_text("❌ 平倉價格格式錯誤")
+            return
+    else:
+        # 嘗試從快取取現價
+        close_price = pos["entry_price"]   # fallback
+        if pos["market"] == "crypto":
+            coins = await get_scan()
+            mc = next((c for c in coins if c.base == symbol), None)
+            if mc:
+                close_price = mc.last_price
+        elif pos["market"] == "tw":
+            stocks = await get_tw_scan()
+            m = next((s for s in stocks if s.stock_id == symbol), None)
+            if m:
+                close_price = m.close
+        elif pos["market"] == "us":
+            us = await get_us_scan()
+            mu = next((s for s in us if s.ticker == symbol), None)
+            if mu:
+                close_price = mu.close
+
+    _db.close_position(pos["id"], close_price, pos["entry_price"])
+    pnl = (close_price - pos["entry_price"]) / pos["entry_price"] * 100
+    emoji = "🟢" if pnl >= 0 else "🔴"
+    await update.message.reply_text(
+        f"{emoji} *{symbol}* 平倉完成\n\n"
+        f"進場：`{pos['entry_price']:.4f}`\n"
+        f"平倉：`{close_price:.4f}`\n"
+        f"損益：`{pnl:+.2f}%`",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def cmd_positions(update, ctx):
+    """/positions — 查看我的開倉 & 近期平倉"""
+    uid   = update.effective_user.id
+    # admin 可看全部
+    if uid == ADMIN_ID and ctx.args and ctx.args[0] == "all":
+        positions = _db.get_open_positions(user_id=None)
+        header    = "👑 *所有用戶開倉*\n\n"
+    else:
+        positions = _db.get_open_positions(uid)
+        header    = "📊 *我的開倉*\n\n"
+
+    if not positions:
+        closed = _db.get_closed_positions(uid, limit=5)
+        if not closed:
+            await update.message.reply_text(
+                "📭 目前沒有開倉紀錄\n用 `/enter BTC 81000` 開始追蹤",
+                parse_mode=ParseMode.MARKDOWN)
+        else:
+            lines = ["📊 *最近平倉紀錄*\n"]
+            for p in closed:
+                emoji = "🟢" if (p["pnl_pct"] or 0) >= 0 else "🔴"
+                lines.append(f"{emoji} *{p['symbol']}*  `{p['pnl_pct']:+.2f}%`  {p['close_time'][:10]}")
+            await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # 取各市場快取
+    coins     = await get_scan()
+    tw_stocks = await get_tw_scan()
+    us_stocks = await get_us_scan()
+
+    lines = [header]
+    for p in positions:
+        sym = p["symbol"]
+        cur = None
+        if p["market"] == "crypto":
+            mc  = next((c for c in coins if c.base == sym), None)
+            cur = mc.last_price if mc else None
+        elif p["market"] == "tw":
+            m   = next((s for s in tw_stocks if s.stock_id == sym), None)
+            cur = m.close if m else None
+        elif p["market"] == "us":
+            mu  = next((s for s in us_stocks if s.ticker == sym), None)
+            cur = mu.close if mu else None
+        lines.append(_fmt_position_card(p, cur))
+        lines.append("")
+
+    lines.append("用 `/close 代號` 平倉")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
+# ── 背景倉位監控（每 30 分鐘）──
+async def background_position_monitor(ctx):
+    """檢查所有開倉是否觸及 TP/SL，並更新 Trailing Stop"""
+    positions = _db.get_open_positions()
+    if not positions:
+        return
+
+    coins     = await get_scan()
+    tw_stocks = await get_tw_scan()
+    us_stocks = await get_us_scan()
+
+    for p in positions:
+        sym   = p["symbol"]
+        entry = p["entry_price"]
+        tp    = p["tp_price"]
+        sl    = p["sl_price"]
+        high  = p["highest_price"] or entry
+        uid   = p["user_id"]
+
+        # 取得現價
+        cur = None
+        if p["market"] == "crypto":
+            mc  = next((c for c in coins if c.base == sym), None)
+            cur = mc.last_price if mc else None
+        elif p["market"] == "tw":
+            m   = next((s for s in tw_stocks if s.stock_id == sym), None)
+            cur = m.close if m else None
+        elif p["market"] == "us":
+            mu  = next((s for s in us_stocks if s.ticker == sym), None)
+            cur = mu.close if mu else None
+
+        if cur is None:
+            continue
+
+        # Trailing Stop：若現價創新高，SL 跟隨移動（保留 entry→high 漲幅的 50%）
+        if cur > high:
+            _db.update_highest(p["id"], cur)
+            trail_sl = entry + (cur - entry) * 0.5
+            if trail_sl > sl:
+                with _db._conn() as c:
+                    c.execute("UPDATE positions SET sl_price=? WHERE id=?", (trail_sl, p["id"]))
+                sl = trail_sl
+
+        # TP 觸及
+        if cur >= tp:
+            _db.close_position(p["id"], cur, entry)
+            pnl = (cur - entry) / entry * 100
+            try:
+                await ctx.bot.send_message(uid,
+                    f"🎯 *{sym}* 觸及止盈！\n\n"
+                    f"TP `{tp:.4f}` 已達成\n現價 `{cur:.4f}`\n損益 `{pnl:+.2f}%` 🟢",
+                    parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                pass
+
+        # SL 觸及
+        elif cur <= sl:
+            _db.close_position(p["id"], cur, entry)
+            pnl = (cur - entry) / entry * 100
+            try:
+                await ctx.bot.send_message(uid,
+                    f"🛑 *{sym}* 觸及止損！\n\n"
+                    f"SL `{sl:.4f}` 已觸及\n現價 `{cur:.4f}`\n損益 `{pnl:+.2f}%` 🔴",
+                    parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                pass
+
+
+# ============================================================
+# 市場衝突處理（symbol 同時在加密＆美股）
+# ============================================================
+async def _resolve_market_conflict(update, symbol: str, action: str) -> str | None:
+    """
+    若 symbol 同時存在於加密和美股，發送 InlineKeyboard 請用戶選擇。
+    action: 'stock' | 'watch' | 'enter'
+    回傳 None 表示已發送選擇鍵盤（等待回調）。
+    若無衝突，回傳判斷好的 market ('crypto' | 'us')。
+    """
+    coins     = await get_scan()
+    us_stocks = await get_us_scan()
+    in_crypto = any(c.base == symbol for c in coins)
+    in_us     = any(s.ticker == symbol for s in us_stocks)
+
+    if in_crypto and in_us:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🪙 加密貨幣", callback_data=f"mktsel:{action}:{symbol}:crypto"),
+            InlineKeyboardButton("🇺🇸 美股",   callback_data=f"mktsel:{action}:{symbol}:us"),
+        ]])
+        await update.message.reply_text(
+            f"⚠️ `{symbol}` 同時存在於加密貨幣和美股\n請選擇你要查詢的市場：",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard,
+        )
+        return None
+    elif in_crypto:
+        return "crypto"
+    elif in_us:
+        return "us"
+    else:
+        return "unknown"
+
+
+async def cb_market_select(update, ctx):
+    """處理市場選擇的回調：mktsel:ACTION:SYMBOL:MARKET"""
+    q    = update.callback_query
+    await q.answer()
+    _, action, symbol, market = q.data.split(":")
+    await q.edit_message_text(f"✅ 已選擇 {'加密貨幣' if market=='crypto' else '美股'} {symbol}")
+
+    # 模擬執行對應指令
+    class _FakeCtx:
+        args = [symbol]
+        bot  = q.get_bot()
+
+    fake_update = update
+    if action == "stock":
+        # 直接發送對應卡片
+        if market == "crypto":
+            coins = await get_scan()
+            mc    = next((c for c in coins if c.base == symbol), None)
+            if mc:
+                msg = fmt_card(mc, show_triggers=True)
+                sig = await fetch_4h_signal(symbol)
+                if sig:
+                    msg += f"\n├ {sig}"
+                msg += f"\n\n💡 `/trade {symbol}` 查看完整交易建議"
+                await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                           disable_web_page_preview=True)
+        else:
+            us = await get_us_scan()
+            mu = next((s for s in us if s.ticker == symbol), None)
+            if mu:
+                msg = fmt_us_card(mu, show_triggers=True)
+                msg += f"\n\n💡 `/us_trade {symbol}` 查看完整交易建議"
+                await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
+                                           disable_web_page_preview=True)
+    elif action == "watch":
+        uid = q.from_user.id
+        WATCHLISTS.setdefault(uid, set()).add(symbol)
+        _db.save_watch(uid, symbol)
+        await q.message.reply_text(
+            f"✅ 已加入自選股：`{symbol}`（{'加密' if market=='crypto' else '美股'}）",
+            parse_mode=ParseMode.MARKDOWN)
+
+
+# ============================================================
 # 通用個股查詢 /stock
 # ============================================================
 async def cmd_stock(update, ctx):
@@ -1392,7 +2115,10 @@ async def cmd_stock(update, ctx):
     if m_crypto:
         await update.message.reply_text(f"🪙 查詢加密貨幣 {target}...")
         try:
-            msg = fmt_card(m_crypto, show_triggers=True)
+            msg      = fmt_card(m_crypto, show_triggers=True)
+            sig_4h   = await fetch_4h_signal(target)
+            if sig_4h:
+                msg += f"\n├ {sig_4h}"
             msg += f"\n\n💡 `/trade {target}` 查看完整交易建議"
             await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN,
                                             disable_web_page_preview=True)
@@ -1436,7 +2162,14 @@ async def cmd_stock(update, ctx):
 # 啟動 / 關閉 Hook
 # ============================================================
 async def post_init(app):
-    global tv_handler, _webhook_runner
+    global tv_handler, _webhook_runner, WATCHLISTS, WATCH_CONDITIONS
+
+    # DB 初始化並載入持久化資料
+    _db.init_db()
+    WATCHLISTS       = _db.load_watchlists()
+    WATCH_CONDITIONS = _db.load_alert_conditions()
+    log.info(f"[DB] 載入自選股 {sum(len(v) for v in WATCHLISTS.values())} 筆，"
+             f"警報設定 {len(WATCH_CONDITIONS)} 用戶")
 
     # V2.1: 初始化 TradingView Webhook Handler 並啟動 HTTP 伺服器
     tv_handler = TradingViewWebhookHandler(
@@ -1492,6 +2225,15 @@ async def post_init(app):
         BotCommand("us_unsub",       "🇺🇸 取消美股訂閱"),
         # 通用查詢
         BotCommand("stock",          "📊 查詢個股 /stock 2330 | BTC | AAPL"),
+        # Phase 3: 自選股
+        BotCommand("watch",          "⭐ 加入自選股 /watch 2330"),
+        BotCommand("unwatch",        "🗑 移除自選股 /unwatch 2330"),
+        BotCommand("mywatchlist",    "📋 我的自選股即時狀態"),
+        BotCommand("alert",          "⚙️ 設定警報條件 /alert foreign 3"),
+        # Phase 2: 倉位追蹤
+        BotCommand("enter",          "📥 進場記錄 /enter BTC 81000"),
+        BotCommand("close",          "📤 平倉 /close BTC"),
+        BotCommand("positions",      "📊 我的倉位"),
         # 設定
         BotCommand("set_score",      "設總分門檻"),
         BotCommand("set_early",      "設早分門檻"),
@@ -1578,9 +2320,22 @@ def main():
         ("unsub_all",      cmd_unsub_all),
         # V2.3: 通用查詢
         ("stock",          cmd_stock),
+        # Phase 3: 自選股 & 警報
+        ("watch",          cmd_watch),
+        ("unwatch",        cmd_unwatch),
+        ("mywatchlist",    cmd_mywatchlist),
+        ("alert",          cmd_alert),
+        # Phase 2: 倉位追蹤
+        ("enter",          cmd_enter),
+        ("close",          cmd_close),
+        ("positions",      cmd_positions),
     ]
     for name, fn in cmds:
         app.add_handler(CommandHandler(name, fn))
+
+    # InlineKeyboard 回調
+    app.add_handler(CallbackQueryHandler(cb_enter,         pattern=r"^enter:"))
+    app.add_handler(CallbackQueryHandler(cb_market_select, pattern=r"^mktsel:"))
 
     # 加密版排程
     app.job_queue.run_repeating(push_pre_warning, interval=1800, first=120)
@@ -1590,9 +2345,13 @@ def main():
     # 美股排程：每日 21:00 台灣時間（= UTC 13:00，美東 09:00 開盤前）
     app.job_queue.run_daily(push_us_premarket, time=dtime(13, 0))
     # 背景預掃描（快取暖身，讓用戶發指令時秒回）
-    app.job_queue.run_repeating(background_tw_scan,     interval=1800, first=60)
-    app.job_queue.run_repeating(background_us_scan,     interval=1800, first=180)
-    app.job_queue.run_repeating(background_crypto_scan, interval=600,  first=30)
+    app.job_queue.run_repeating(background_tw_scan,          interval=1800, first=60)
+    app.job_queue.run_repeating(background_us_scan,          interval=1800, first=180)
+    app.job_queue.run_repeating(background_crypto_scan,      interval=600,  first=30)
+    # Phase 3: 自選股監控（每 30 分鐘）
+    app.job_queue.run_repeating(background_watchlist_monitor, interval=1800, first=300)
+    # Phase 2: 倉位監控（每 30 分鐘）
+    app.job_queue.run_repeating(background_position_monitor,  interval=1800, first=360)
 
     log.info("🤖 妖幣 Bot V2.3 啟動（加密 + TradingView + 台股 + 美股）")
     app.run_polling()
