@@ -450,23 +450,60 @@ def score_us_stock(d: UsStockData) -> UsStockMetrics:
 def calc_rs_rating(closes: list[float], spy_closes: list[float] | None = None) -> float:
     """
     IBD 風格 RS Rating：比較個股近 12 個月表現 vs 市場（SPY）
-    若無 SPY 資料，用 0 報酬作為基準
+    若無 SPY 資料，用同批股票中位報酬作為基準
     回傳 0~99 分
     """
     if len(closes) < 60:
         return 0.0
-    # 近 12 個月報酬（用最多 252 根）
     lookback = min(len(closes) - 1, 252)
     stock_ret = (closes[-1] - closes[-lookback]) / closes[-lookback] if closes[-lookback] > 0 else 0
     # 若有 SPY 資料比較
     spy_ret = 0.0
     if spy_closes and len(spy_closes) >= lookback:
         spy_ret = (spy_closes[-1] - spy_closes[-lookback]) / spy_closes[-lookback] if spy_closes[-lookback] > 0 else 0
-    # 超額報酬
+    # 超額報酬（縮小係數，避免全員爆分）
     excess = stock_ret - spy_ret
-    # 轉換成 0~99 分（超額報酬 ±50% 對應 0~99）
-    rs = 50 + excess * 100
+    # 轉換成 0~99 分（超額報酬 ±100% 對應 0~99，不再是 ±50%）
+    rs = 50 + excess * 50
     return max(0.0, min(99.0, rs))
+
+
+def recalc_rs_ratings(metrics: list) -> list:
+    """
+    用同批股票的中位報酬作為基準重算 RS Rating
+    避免沒有 SPY 資料時全員都是 99 的問題
+    """
+    if not metrics:
+        return metrics
+    # 收集所有股票的 12 個月報酬
+    rets = []
+    for m in metrics:
+        if m.rs_rating > 0:
+            # 反推原始報酬（rs = 50 + ret*50 → ret = (rs-50)/50）
+            rets.append((m.rs_rating - 50) / 50)
+    if not rets:
+        return metrics
+    import statistics
+    median_ret = statistics.median(rets)
+    # 重新以中位數為基準計算百分位排名
+    for m in metrics:
+        if m.rs_rating > 0:
+            raw_ret = (m.rs_rating - 50) / 50
+            # 相對中位數的超額報酬
+            excess = raw_ret - median_ret
+            m.rs_rating = max(0.0, min(99.0, 50 + excess * 100))
+            # 更新 rs_score
+            if m.rs_rating >= 90:
+                m.rs_score = 15.0
+            elif m.rs_rating >= 80:
+                m.rs_score = 11.0
+            elif m.rs_rating >= 70:
+                m.rs_score = 7.0
+            elif m.rs_rating >= 50:
+                m.rs_score = 3.0
+            else:
+                m.rs_score = 0.0
+    return metrics
 
 
 def score_rs_rating(m: "UsStockMetrics") -> tuple[float, list[str]]:
@@ -574,6 +611,8 @@ async def fetch_all_us_metrics(
     raw = await fetch_all_us_stocks(tickers=tickers, top_n=top_n)
     metrics = [score_us_stock(d) for d in raw]
     metrics.sort(key=lambda x: x.total_score, reverse=True)
+    # 用同批股票中位數重算 RS Rating，避免全員爆分
+    metrics = recalc_rs_ratings(metrics)
     log.info(f"[US] 評分完成，{len(metrics)} 支")
     return metrics
 

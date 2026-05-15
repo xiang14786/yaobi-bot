@@ -135,6 +135,11 @@ def _fetch_one_sync(ticker: str, period: str = "3mo") -> UsStockData:
             log.debug(f"[US] {ticker} info 取得失敗（非嚴重）: {e}")
             result.name = ticker  # 至少用代號
 
+        # 若 week52 沒從 info 抓到，從價格歷史補算
+        if result.week52_high == 0 and len(result.closes) >= 20:
+            result.week52_high = max(result.highs[-min(252, len(result.highs)):]) if result.highs else max(result.closes[-min(252, len(result.closes)):])
+            result.week52_low  = min(result.lows[-min(252, len(result.lows)):])  if result.lows  else min(result.closes[-min(252, len(result.closes)):])
+
     except Exception as e:
         result.fetch_ok  = False
         result.error_msg = str(e)[:80]
