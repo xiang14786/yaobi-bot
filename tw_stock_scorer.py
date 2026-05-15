@@ -52,6 +52,9 @@ class TwStockMetrics:
     score_ob_fvg:      float = 0.0   # OB+FVG 結構
     score_institution: float = 0.0   # 法人動向
     score_margin:      float = 0.0   # 融資融券
+    ma20:              float = 0.0   # MA20 值（顯示用）
+    ma60:              float = 0.0   # MA60 值（顯示用）
+    ma_multiplier:     float = 1.0   # 趨勢修正乘數
 
     # 綜合分數
     total_score:  float = 0.0
@@ -116,6 +119,26 @@ def _percentile(data: list[float], pct: float) -> float:
 # ──────────────────────────────────────────────
 #  各維度評分函式
 # ──────────────────────────────────────────────
+def score_ma_trend(closes: list[float]) -> tuple[float, float, float]:
+    """MA20/MA60 趨勢修正乘數 (0.82~1.12)，回傳 (multiplier, ma20, ma60)"""
+    if len(closes) < 60:
+        return 1.0, 0.0, 0.0
+    ma20 = sum(closes[-20:]) / 20
+    ma60 = sum(closes[-60:]) / 60
+    price = closes[-1]
+    if price > ma20 > ma60:
+        return 1.12, ma20, ma60
+    elif price > ma60 and ma20 >= ma60:
+        return 1.05, ma20, ma60
+    elif price > ma20 and ma20 < ma60:
+        return 1.02, ma20, ma60
+    elif price < ma20 < ma60:
+        return 0.82, ma20, ma60
+    elif price < ma60:
+        return 0.88, ma20, ma60
+    else:
+        return 1.0, ma20, ma60
+
 def score_bb_squeeze(closes: list[float], n: int = 20, mult: float = 2.0) -> tuple[float, bool]:
     """布林帶壓縮評分 (0~100)，並回傳是否壓縮中"""
     if len(closes) < 40:
@@ -469,6 +492,15 @@ def score_tw_stock(raw: TwStockData) -> TwStockMetrics:
         m.score_institution * weights["institution"] +
         m.score_margin      * weights["margin"]
     )
+
+    # MA20/MA60 趨勢修正（乘數：0.82 ~ 1.12）
+    m.ma_multiplier, m.ma20, m.ma60 = score_ma_trend(closes)
+    m.total_score = min(100, m.total_score * m.ma_multiplier)
+    if m.ma_multiplier >= 1.10 and m.ma20 > 0:
+        m.triggers.append(f"📈 多頭排列（MA20 {m.ma20:.1f} > MA60 {m.ma60:.1f}）")
+        m.tags.append("📈多頭排列")
+    elif m.ma_multiplier <= 0.85 and m.ma60 > 0:
+        m.triggers.append(f"📉 跌破季線（MA60 {m.ma60:.1f}），訊號打折")
 
     # 領先分（尚未啟動的早期信號）
     m.early_score = (

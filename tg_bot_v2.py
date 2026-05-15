@@ -548,7 +548,7 @@ async def cmd_us_detail(update, ctx):
         f"量比: `{m.volume_ratio:.2f}x`  Beta: `{m.beta:.2f}`\n"
         f"市值: `{'${:.2f}T'.format(m.market_cap/1e12) if m.market_cap>=1e12 else '${:.0f}B'.format(m.market_cap/1e9)}`\n\n"
         f"*技術指標*\n"
-        f"RSI: `{m.rsi:.1f}`  MA20: `${m.ma20:,.2f}`  MA50: `${m.ma50:,.2f}`\n"
+        f"RSI: `{m.rsi:.1f}`  MA20: `${m.ma20:,.2f}`  MA60: `${m.ma60:,.2f}`\n"
         f"距52W高: `{m.dist_52w_high_pct:.1f}%`  52W低: `${m.week52_low:,.2f}`\n\n"
         f"*空頭部位*\n"
         f"空頭比例: `{m.short_float:.1%}`  回補天數: `{m.short_ratio:.1f}`\n\n"

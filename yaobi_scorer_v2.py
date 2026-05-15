@@ -30,16 +30,16 @@ BINANCE_API = "https://api.binance.com"
 
 # 升級後權重 - 領先指標佔比最高
 WEIGHTS_V2 = {
-    "early_warning":  0.28,   # 提早預警 (最關鍵)
-    "structure":      0.16,   # OB + FVG 結構
-    "price_momentum": 0.07,   # 降低,因為已動 = 已晚
+    "early_warning":  0.26,   # 提早預警 (最關鍵)
+    "structure":      0.12,   # OB + FVG 結構（降低，雜訊較多）
+    "price_momentum": 0.05,   # 降低，已動 = 已晚
     "volume_anomaly": 0.09,
-    "funding_rate":   0.10,
+    "funding_rate":   0.13,   # 提升：空頭付費 = 最直接多頭壓力來源
     "long_short":     0.05,
-    "top_trader":     0.08,   # 頂級交易者多空比 (新增)
+    "top_trader":     0.11,   # 提升：大戶偏向更具參考性
     "liquidation":    0.06,
-    "sentiment":      0.06,
-    "on_chain":       0.05,
+    "sentiment":      0.09,   # 提升：Taker 買賣比 = CVD 代理指標
+    "on_chain":       0.04,
 }
 
 DEFAULT_FILTERS_V2 = {

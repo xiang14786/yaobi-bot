@@ -69,7 +69,7 @@ class UsStockMetrics:
     # RSI, MA
     rsi:          float = 50.0
     ma20:         float = 0.0
-    ma50:         float = 0.0
+    ma60:         float = 0.0
     dist_52w_high_pct: float = 0.0  # 距 52 週高點 %
     rs_rating:    float = 0.0   # RS Rating 0~99（相對強度）
     rs_score:     float = 0.0   # RS 評分維度分數（0~15）
@@ -218,7 +218,7 @@ def score_volume(d: UsStockData) -> tuple[float, list[str]]:
 
 
 def score_momentum(d: UsStockData) -> tuple[float, list[str]]:
-    """動能評分：RSI + 均線排列（0~20）"""
+    """動能評分：RSI + 均線排列 + 52週高點（0~20）"""
     if len(d.closes) < 20:
         return 0.0, []
     triggers = []
@@ -226,7 +226,7 @@ def score_momentum(d: UsStockData) -> tuple[float, list[str]]:
 
     rsi = _rsi(d.closes)
     ma20 = _sma(d.closes, 20)
-    ma50 = _sma(d.closes, min(50, len(d.closes)))
+    ma60 = _sma(d.closes, min(60, len(d.closes)))
 
     # RSI 評分
     if 55 <= rsi <= 75:
@@ -238,11 +238,11 @@ def score_momentum(d: UsStockData) -> tuple[float, list[str]]:
     elif 40 <= rsi < 50:
         score += 1  # 弱
 
-    # 均線排列
+    # 均線排列（MA20/MA60，季線週期）
     if d.close > ma20 > 0:
         score += 4
-        if d.close > ma50 > 0 and ma20 > ma50:
-            score += 4; triggers.append("📊 多頭排列（價>MA20>MA50）")
+        if d.close > ma60 > 0 and ma20 > ma60:
+            score += 4; triggers.append("📊 多頭排列（價>MA20>MA60）")
         else:
             triggers.append("📊 站上 MA20")
 
@@ -250,9 +250,19 @@ def score_momentum(d: UsStockData) -> tuple[float, list[str]]:
     if ma20 > 0:
         dev = (d.close - ma20) / ma20 * 100
         if 1 <= dev <= 8:
-            score += 4   # 剛突破，適合追
+            score += 2   # 剛突破，適合追
         elif dev > 8:
             score += 1   # 漲多，稍微給分
+
+    # 52 週高點距離（IBD 風格：強勢股靠近新高）
+    if d.week52_high > 0:
+        dist = (d.close - d.week52_high) / d.week52_high * 100
+        if dist >= -5:
+            score += 4; triggers.append("🏆 接近 52 週高點（強勢股）")
+        elif dist >= -15:
+            score += 2; triggers.append(f"📍 距 52 週高點 {abs(dist):.1f}%")
+        elif dist <= -40:
+            score -= 2  # 深度修正，給懲罰
 
     return min(score, 20.0), triggers
 
@@ -401,7 +411,7 @@ def score_us_stock(d: UsStockData) -> UsStockMetrics:
     # 技術輔助資料
     m.rsi  = _rsi(d.closes)
     m.ma20 = _sma(d.closes, 20)
-    m.ma50 = _sma(d.closes, min(50, len(d.closes)))
+    m.ma60 = _sma(d.closes, min(60, len(d.closes)))
     if d.week52_high > 0:
         m.dist_52w_high_pct = (d.close - d.week52_high) / d.week52_high * 100
 
