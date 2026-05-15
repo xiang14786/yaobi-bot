@@ -5,710 +5,518 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>妖幣雷達 V2.3 使用說明</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
-    background: #0d1117;
-    color: #e6edf3;
-    line-height: 1.7;
-  }
-  .hero {
-    background: linear-gradient(135deg, #1a1f2e 0%, #0d1117 50%, #1a2640 100%);
-    padding: 60px 40px 50px;
-    text-align: center;
-    border-bottom: 1px solid #21262d;
-  }
-  .hero h1 { font-size: 2.8rem; font-weight: 800; margin-bottom: 8px; }
-  .hero h1 span { background: linear-gradient(90deg, #58a6ff, #3fb950); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  .hero .subtitle { color: #8b949e; font-size: 1.1rem; }
-  .badge { display: inline-block; background: #238636; color: #fff; font-size: 0.75rem; padding: 2px 10px; border-radius: 20px; margin-left: 10px; vertical-align: middle; }
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;background:#0d1117;color:#e6edf3;line-height:1.7;min-height:100vh}
+a{color:#58a6ff;text-decoration:none}
 
-  .container { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+/* Hero */
+.hero{background:linear-gradient(135deg,#1a1f2e,#0d1117 60%,#1a2640);padding:52px 24px 44px;text-align:center;border-bottom:1px solid #21262d}
+.hero-icon{font-size:3rem;margin-bottom:12px}
+.hero h1{font-size:2.4rem;font-weight:800;background:linear-gradient(90deg,#58a6ff,#3fb950);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:6px}
+.hero p{color:#8b949e;font-size:1rem;margin-top:6px}
+.badge{display:inline-block;background:#238636;color:#fff;font-size:.72rem;padding:2px 10px;border-radius:20px;margin-left:8px;vertical-align:middle;-webkit-text-fill-color:#fff}
+.hero-tip{margin-top:14px;background:#0d2149;border:1px solid #1f6feb;border-radius:8px;display:inline-block;padding:8px 16px;font-size:.85rem;color:#79c0ff}
 
-  h2 { font-size: 1.5rem; font-weight: 700; margin: 48px 0 20px; padding-bottom: 10px; border-bottom: 1px solid #21262d; display: flex; align-items: center; gap: 10px; }
-  h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; color: #79c0ff; }
+/* Market nav */
+.market-nav{display:flex;justify-content:center;flex-wrap:wrap;gap:10px;padding:28px 16px 0}
+.mkt-btn{background:#161b22;border:1.5px solid #21262d;border-radius:12px;padding:14px 20px;cursor:pointer;font-size:1rem;font-weight:600;color:#e6edf3;transition:all .2s;min-width:120px;text-align:center}
+.mkt-btn:hover{border-color:#58a6ff;background:#1c2a3e}
+.mkt-btn.active{border-color:#58a6ff;background:#0d2149;color:#79c0ff}
+.mkt-btn .mkt-icon{font-size:1.6rem;display:block;margin-bottom:4px}
 
-  .market-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 32px; }
-  .market-card {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 12px;
-    padding: 24px 20px;
-    text-align: center;
-    transition: border-color 0.2s;
-  }
-  .market-card:hover { border-color: #58a6ff; }
-  .market-card .icon { font-size: 2.2rem; margin-bottom: 10px; }
-  .market-card h3 { margin: 0 0 8px; color: #e6edf3; font-size: 1rem; }
-  .market-card p { color: #8b949e; font-size: 0.85rem; }
+/* Content */
+.content{max-width:900px;margin:0 auto;padding:28px 16px 80px}
+.market-panel{display:none}
+.market-panel.active{display:block}
 
-  .cmd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .cmd-card {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 10px;
-    padding: 16px 18px;
-    display: flex;
-    gap: 14px;
-    align-items: flex-start;
-    transition: border-color 0.2s;
-  }
-  .cmd-card:hover { border-color: #30363d; }
-  .cmd-card .icon { font-size: 1.5rem; flex-shrink: 0; margin-top: 2px; }
-  .cmd-card .cmd { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.9rem; color: #79c0ff; font-weight: 600; }
-  .cmd-card .desc { color: #8b949e; font-size: 0.85rem; margin-top: 3px; }
-  .cmd-card .example { font-family: monospace; font-size: 0.8rem; color: #3fb950; margin-top: 4px; background: #0d1117; padding: 3px 8px; border-radius: 4px; display: inline-block; }
+/* Accordion */
+.acc-item{background:#161b22;border:1px solid #21262d;border-radius:10px;margin-bottom:10px;overflow:hidden}
+.acc-header{padding:16px 20px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:1rem;transition:background .15s;user-select:none}
+.acc-header:hover{background:#1c2a3e}
+.acc-header .acc-icon{font-size:1.1rem;margin-right:10px}
+.acc-arrow{transition:transform .2s;color:#8b949e;font-size:.9rem}
+.acc-item.open .acc-arrow{transform:rotate(180deg)}
+.acc-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.acc-item.open .acc-body{max-height:2000px}
+.acc-inner{padding:4px 20px 20px}
 
-  .section-full .cmd-card { grid-column: span 1; }
+/* Cmd list */
+.cmd-list{list-style:none}
+.cmd-list li{padding:8px 0;border-bottom:1px solid #21262d;font-size:.88rem;display:flex;gap:12px;align-items:flex-start}
+.cmd-list li:last-child{border-bottom:none}
+.cmd-name{font-family:"SF Mono","Fira Code",monospace;color:#79c0ff;font-size:.85rem;flex-shrink:0;min-width:160px}
+.cmd-alias{font-family:monospace;color:#3fb950;font-size:.78rem;margin-top:2px}
+.cmd-desc{color:#c9d1d9;font-size:.85rem}
 
-  .flow-steps { display: flex; gap: 0; margin: 20px 0; flex-wrap: wrap; }
-  .step {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 10px;
-    padding: 18px 20px;
-    flex: 1;
-    min-width: 160px;
-    position: relative;
-  }
-  .step:not(:last-child)::after {
-    content: "→";
-    position: absolute;
-    right: -18px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: #58a6ff;
-    font-size: 1.2rem;
-    z-index: 1;
-  }
-  .step + .step { margin-left: 24px; }
-  .step .num { background: #1f6feb; color: #fff; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; margin-bottom: 10px; }
-  .step .title { font-weight: 600; font-size: 0.95rem; margin-bottom: 4px; }
-  .step .detail { color: #8b949e; font-size: 0.82rem; }
-  .step .code { font-family: monospace; font-size: 0.82rem; color: #79c0ff; margin-top: 6px; }
+/* Score table */
+.score-table{width:100%;border-collapse:collapse;margin:12px 0}
+.score-table th{background:#0d1117;color:#8b949e;font-size:.78rem;font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid #21262d}
+.score-table td{padding:9px 12px;border-bottom:1px solid #161b22;font-size:.85rem;color:#c9d1d9}
+.score-table tr:hover td{background:#1c2a3e}
+.pct-bar-wrap{background:#21262d;border-radius:20px;height:8px;width:100px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:6px}
+.pct-bar{height:100%;border-radius:20px;background:linear-gradient(90deg,#1f6feb,#3fb950)}
 
-  .tip-box {
-    background: #0d2149;
-    border: 1px solid #1f6feb;
-    border-radius: 10px;
-    padding: 16px 20px;
-    margin: 20px 0;
-    display: flex;
-    gap: 12px;
-    align-items: flex-start;
-  }
-  .tip-box .tip-icon { font-size: 1.3rem; flex-shrink: 0; }
-  .tip-box p { color: #c9d1d9; font-size: 0.9rem; }
-  .tip-box strong { color: #79c0ff; }
+/* Indicator cards */
+.ind-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:12px}
+.ind-card{background:#0d1117;border:1px solid #21262d;border-radius:10px;padding:16px}
+.ind-card .ind-name{font-weight:700;font-size:.95rem;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.ind-card .ind-full{font-size:.75rem;color:#8b949e;margin-bottom:8px}
+.ind-card .ind-desc{font-size:.82rem;color:#c9d1d9;margin-bottom:8px}
+.ind-card .bull{color:#3fb950;font-size:.8rem}
+.ind-card .bear{color:#f85149;font-size:.8rem}
+.tag-pill{display:inline-block;padding:2px 8px;border-radius:12px;font-size:.72rem;font-weight:600}
+.tag-green{background:#0d3321;color:#3fb950;border:1px solid #238636}
+.tag-red{background:#2d0f0f;color:#f85149;border:1px solid #6e1313}
+.tag-blue{background:#0d2149;color:#79c0ff;border:1px solid #1f6feb}
 
-  .indicator-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
-  .ind-card {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 10px;
-    padding: 16px;
-  }
-  .ind-card .label { font-size: 0.8rem; color: #8b949e; margin-bottom: 4px; }
-  .ind-card .name { font-weight: 700; font-size: 1rem; color: #e6edf3; margin-bottom: 6px; }
-  .ind-card .explain { font-size: 0.82rem; color: #8b949e; }
-  .ind-card .bull { color: #3fb950; font-size: 0.82rem; margin-top: 4px; }
-  .ind-card .bear { color: #f85149; font-size: 0.82rem; }
+/* Tip box */
+.tip{background:#0d2149;border:1px solid #1f6feb;border-radius:8px;padding:12px 16px;font-size:.85rem;color:#c9d1d9;margin:12px 0;display:flex;gap:10px}
+.tip-warn{background:#2d1f00;border-color:#b97d00;color:#e3b341}
 
-  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-  .tag {
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 0.82rem;
-    font-weight: 500;
-  }
-  .tag.green { background: #0d3321; color: #3fb950; border: 1px solid #238636; }
-  .tag.red { background: #2d0f0f; color: #f85149; border: 1px solid #6e1313; }
-  .tag.blue { background: #0d2149; color: #79c0ff; border: 1px solid #1f6feb; }
-  .tag.yellow { background: #2d2007; color: #e3b341; border: 1px solid #5c4a00; }
+/* Section title */
+.sec-title{font-size:1rem;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:.08em;margin:20px 0 10px;font-size:.78rem}
 
-  .score-bar { background: #21262d; border-radius: 20px; height: 12px; margin: 6px 0; overflow: hidden; }
-  .score-fill { height: 100%; border-radius: 20px; background: linear-gradient(90deg, #1f6feb, #3fb950); }
+footer{text-align:center;color:#8b949e;font-size:.8rem;padding:32px;border-top:1px solid #21262d;margin-top:40px}
 
-  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-  th { background: #161b22; color: #8b949e; font-size: 0.82rem; font-weight: 600; text-align: left; padding: 10px 14px; border-bottom: 1px solid #21262d; }
-  td { padding: 10px 14px; border-bottom: 1px solid #161b22; font-size: 0.88rem; color: #c9d1d9; }
-  td code { font-family: monospace; color: #79c0ff; background: #0d1117; padding: 1px 6px; border-radius: 4px; }
-  tr:hover td { background: #161b22; }
-
-  .tg-mockup {
-    background: #1c2733;
-    border-radius: 12px;
-    padding: 20px;
-    margin: 20px 0;
-    font-family: -apple-system, sans-serif;
-    max-width: 400px;
-  }
-  .tg-msg {
-    background: #2b5278;
-    border-radius: 16px 16px 4px 16px;
-    padding: 10px 14px;
-    margin-bottom: 8px;
-    font-size: 0.88rem;
-    display: inline-block;
-    max-width: 85%;
-    float: right;
-    clear: both;
-    color: #fff;
-  }
-  .tg-reply {
-    background: #182533;
-    border-radius: 16px 16px 16px 4px;
-    padding: 12px 14px;
-    margin-bottom: 8px;
-    font-size: 0.83rem;
-    max-width: 90%;
-    clear: both;
-    color: #e6edf3;
-    border: 1px solid #21262d;
-  }
-  .tg-reply .bold { font-weight: 700; }
-  .tg-reply .green { color: #3fb950; }
-  .tg-reply .red { color: #f85149; }
-  .tg-reply .mono { font-family: monospace; font-size: 0.8rem; }
-  .clearfix::after { content: ""; display: table; clear: both; }
-
-  footer { text-align: center; color: #8b949e; font-size: 0.82rem; padding: 40px; border-top: 1px solid #21262d; }
-
-  @media (max-width: 600px) {
-    .market-grid { grid-template-columns: 1fr; }
-    .cmd-grid { grid-template-columns: 1fr; }
-    .indicator-grid { grid-template-columns: 1fr; }
-    .flow-steps { flex-direction: column; }
-    .step::after { display: none; }
-    .step + .step { margin-left: 0; margin-top: 12px; }
-    .hero h1 { font-size: 1.8rem; }
-  }
+@media(max-width:580px){
+  .hero h1{font-size:1.7rem}
+  .mkt-btn{min-width:calc(50% - 10px);padding:12px}
+  .cmd-name{min-width:130px}
+}
 </style>
 </head>
 <body>
 
 <div class="hero">
-  <div style="font-size:3rem;margin-bottom:12px;">🔮</div>
-  <h1><span>妖幣雷達</span> V2.3</h1>
-  <p class="subtitle">多市場 Telegram 交易機器人 <span class="badge">最新版</span></p>
-  <p style="color:#8b949e;font-size:0.85rem;margin-top:12px;">加密貨幣 · 台股 · 美股｜自動掃描 · 倉位追蹤 · 聰明錢偵測</p>
+  <div class="hero-icon">🔮</div>
+  <h1>妖幣雷達 <span class="badge">V2.3</span></h1>
+  <p>多市場 Telegram 交易機器人 · 加密貨幣 · 台股 · 美股</p>
+  <div class="hero-tip">💡 指令底線可省略，手機更好打！<br><code>/twscan</code> = <code>/tw_scan</code> &nbsp;·&nbsp; <code>/prepump</code> = <code>/pre_pump</code></div>
 </div>
 
-<div class="container">
-
-  <!-- 三大市場 -->
-  <h2>📊 支援三大市場</h2>
-  <div class="market-grid">
-    <div class="market-card">
-      <div class="icon">🪙</div>
-      <h3>加密貨幣</h3>
-      <p>Binance 合約市場<br>每 10 分鐘自動掃描<br>60 大主流幣</p>
-    </div>
-    <div class="market-card">
-      <div class="icon">🇹🇼</div>
-      <h3>台股</h3>
-      <p>TWSE + FinMind<br>每 30 分鐘自動掃描<br>法人籌碼追蹤</p>
-    </div>
-    <div class="market-card">
-      <div class="icon">🇺🇸</div>
-      <h3>美股</h3>
-      <p>Yahoo Finance<br>每 30 分鐘自動掃描<br>RS Rating + 法人累積</p>
-    </div>
-  </div>
-
-  <!-- 快速開始 -->
-  <h2>🚀 快速開始</h2>
-  <div class="flow-steps">
-    <div class="step">
-      <div class="num">1</div>
-      <div class="title">啟動 Bot</div>
-      <div class="detail">傳送指令給 Bot</div>
-      <div class="code">/start</div>
-    </div>
-    <div class="step">
-      <div class="num">2</div>
-      <div class="title">掃描市場</div>
-      <div class="detail">查看當前機會榜</div>
-      <div class="code">/top10</div>
-    </div>
-    <div class="step">
-      <div class="num">3</div>
-      <div class="title">查詢個股</div>
-      <div class="detail">查任何標的詳情</div>
-      <div class="code">/stock BTC</div>
-    </div>
-    <div class="step">
-      <div class="num">4</div>
-      <div class="title">加入自選</div>
-      <div class="detail">追蹤你的標的</div>
-      <div class="code">/watch BTC</div>
-    </div>
-    <div class="step">
-      <div class="num">5</div>
-      <div class="title">記錄進場</div>
-      <div class="detail">追蹤倉位盈虧</div>
-      <div class="code">/enter BTC 95000</div>
-    </div>
-  </div>
-
-  <!-- 加密貨幣指令 -->
-  <h2>🪙 加密貨幣指令</h2>
-  <div class="cmd-grid">
-    <div class="cmd-card">
-      <div class="icon">🔋</div>
-      <div>
-        <div class="cmd">/pre_pump</div>
-        <div class="desc">預備暴漲榜 — 尚未大漲但評分高的幣，適合提前佈局</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">⚠️</div>
-      <div>
-        <div class="cmd">/pre_dump</div>
-        <div class="desc">預備暴跌榜 — 評分低、多空轉差，適合做空或避開</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🎯</div>
-      <div>
-        <div class="cmd">/squeeze</div>
-        <div class="desc">布林帶壓縮榜 — 波動收窄蓄勢，即將爆發的幣</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🏆</div>
-      <div>
-        <div class="cmd">/confidence</div>
-        <div class="desc">高信心榜 — 多個指標同時看多，勝率較高</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🎛️</div>
-      <div>
-        <div class="cmd">/scan</div>
-        <div class="desc">個人化掃描 — 依你設定的門檻篩選（可用 /set_score 調整）</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🔟</div>
-      <div>
-        <div class="cmd">/top10</div>
-        <div class="desc">綜合 Top 10 — 總評分最高的 10 個幣</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📈</div>
-      <div>
-        <div class="cmd">/pump</div>
-        <div class="desc">看多榜 — 多頭信號強的幣</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📉</div>
-      <div>
-        <div class="cmd">/dump</div>
-        <div class="desc">看空榜 — 空頭信號強的幣</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🐋</div>
-      <div>
-        <div class="cmd">/smartmoney</div>
-        <div class="desc">聰明錢偵測 — Binance 頂級交易者倉位異常信號</div>
-        <div class="example">機構建倉 / 軋空機會 / 多頭優勢</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">💡</div>
-      <div>
-        <div class="cmd">/trade BTC</div>
-        <div class="desc">完整交易建議 — 進場時機、止盈止損、風險評估</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🔍</div>
-      <div>
-        <div class="cmd">/detail BTC</div>
-        <div class="desc">詳細指標 — 所有原始數據一次看</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📐</div>
-      <div>
-        <div class="cmd">/structure BTC</div>
-        <div class="desc">OB + FVG 結構分析 — 訂單塊與價值缺口偵測</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 台股指令 -->
-  <h2>🇹🇼 台股指令</h2>
-  <div class="cmd-grid">
-    <div class="cmd-card">
-      <div class="icon">🔋</div>
-      <div>
-        <div class="cmd">/tw_scan</div>
-        <div class="desc">台股預備暴漲榜 — 法人買超 + 技術面蓄勢</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🎯</div>
-      <div>
-        <div class="cmd">/tw_squeeze</div>
-        <div class="desc">台股布林帶壓縮 — 波動收窄蓄勢待發</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🏦</div>
-      <div>
-        <div class="cmd">/tw_foreign</div>
-        <div class="desc">外資連買榜 — 外資連續買超天數排行</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🤝</div>
-      <div>
-        <div class="cmd">/tw_joint</div>
-        <div class="desc">法人聯手榜 — 外資 + 投信同時買超，最強信號</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🔟</div>
-      <div>
-        <div class="cmd">/tw_top10</div>
-        <div class="desc">台股綜合 Top 10</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📋</div>
-      <div>
-        <div class="cmd">/tw_detail 2330</div>
-        <div class="desc">台股個股詳細指標</div>
-        <div class="example">/tw_detail 2330 查台積電</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 美股指令 -->
-  <h2>🇺🇸 美股指令</h2>
-  <div class="cmd-grid">
-    <div class="cmd-card">
-      <div class="icon">🔋</div>
-      <div>
-        <div class="cmd">/us_scan</div>
-        <div class="desc">美股預備暴漲榜 — RS Rating 高 + 技術蓄勢</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🎯</div>
-      <div>
-        <div class="cmd">/us_squeeze</div>
-        <div class="desc">美股布林帶壓縮榜</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">⚡</div>
-      <div>
-        <div class="cmd">/us_short</div>
-        <div class="desc">軋空候選榜 — 空頭比例高但技術轉強，軋空潛力</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🚀</div>
-      <div>
-        <div class="cmd">/us_momentum</div>
-        <div class="desc">動能榜 — 近期強勢領漲股</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📊</div>
-      <div>
-        <div class="cmd">/us_rs</div>
-        <div class="desc">RS Rating 領導股榜 — IBD 風格 1 年相對強度 0-99 分</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🏛️</div>
-      <div>
-        <div class="cmd">/us_accum</div>
-        <div class="desc">法人累積榜 — A/D Ratio 高的股，法人在買</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 通用查詢 -->
-  <h2>🔍 通用查詢指令</h2>
-  <div class="tip-box">
-    <div class="tip-icon">💡</div>
-    <p><strong>/stock</strong> 會自動判斷市場：輸入股票代號就查台股、英文代號查美股、幣種查加密。</p>
-  </div>
-  <div class="cmd-grid">
-    <div class="cmd-card">
-      <div class="icon">📊</div>
-      <div>
-        <div class="cmd">/stock [代號]</div>
-        <div class="desc">通用個股查詢，自動識別市場</div>
-        <div class="example">/stock 2330 &nbsp; /stock BTC &nbsp; /stock NVDA</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🤖</div>
-      <div>
-        <div class="cmd">/status</div>
-        <div class="desc">Bot 運作狀態 — 快取時間、掃描幣數、上次更新</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 自選股 & 警報 -->
-  <h2>⭐ 自選股 & 警報</h2>
-  <div class="cmd-grid">
-    <div class="cmd-card">
-      <div class="icon">⭐</div>
-      <div>
-        <div class="cmd">/watch [代號]</div>
-        <div class="desc">加入自選股，Bot 會主動監控並在條件觸發時通知你</div>
-        <div class="example">/watch BTC &nbsp;&nbsp; /watch 2330</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🗑️</div>
-      <div>
-        <div class="cmd">/unwatch [代號]</div>
-        <div class="desc">移除自選股</div>
-        <div class="example">/unwatch BTC</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📋</div>
-      <div>
-        <div class="cmd">/mywatchlist</div>
-        <div class="desc">查看我的自選股即時狀態，包含評分與方向</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">⚙️</div>
-      <div>
-        <div class="cmd">/alert [類型] [數字]</div>
-        <div class="desc">設定警報條件</div>
-        <div class="example">/alert foreign 3 &nbsp;（外資連買 3 天通知）<br>/alert pre 70 &nbsp;&nbsp;（評分達 70 分通知）</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 倉位追蹤 -->
-  <h2>📥 倉位追蹤</h2>
-  <div class="tip-box">
-    <div class="tip-icon">🛡️</div>
-    <p>Bot 會自動計算 <strong>止盈（TP）</strong> 和 <strong>止損（SL）</strong>，並在背景每 30 分鐘監控。觸及 TP/SL 時會主動推播通知。</p>
-  </div>
-
-  <h3>流程示範</h3>
-  <div class="tg-mockup">
-    <div class="clearfix">
-      <div class="tg-msg">/enter BTC 95000 l 10</div>
-    </div>
-    <div class="tg-reply">
-      <div class="bold">📥 BTC 進場確認</div>
-      <div>方向：多單 🟢　槓桿：10x</div>
-      <div>進場：$95,000</div>
-      <div class="green">🎯 止盈：$104,500 (+10%)</div>
-      <div class="red">🛡 止損：$90,250 (-5%)</div>
-      <br>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <span style="background:#238636;color:#fff;padding:4px 12px;border-radius:6px;font-size:0.8rem;">✅ 確認進場</span>
-        <span style="background:#21262d;color:#e6edf3;padding:4px 12px;border-radius:6px;font-size:0.8rem;">✏️ 自訂 TP/SL</span>
-        <span style="background:#21262d;color:#e6edf3;padding:4px 12px;border-radius:6px;font-size:0.8rem;">❌ 取消</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="cmd-grid">
-    <div class="cmd-card">
-      <div class="icon">📥</div>
-      <div>
-        <div class="cmd">/enter [代號] [價格] [方向] [槓桿]</div>
-        <div class="desc">記錄進場。方向：l 做多 / s 做空；槓桿預設 1（現貨）</div>
-        <div class="example">/enter BTC 95000 l 10</div>
-        <div class="example">/enter 2330 950</div>
-        <div class="example">/enter NVDA 130 s 3</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📤</div>
-      <div>
-        <div class="cmd">/close [代號] [價格]</div>
-        <div class="desc">手動平倉，Bot 計算盈虧。有多筆時會顯示選擇選單</div>
-        <div class="example">/close BTC 98000</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📊</div>
-      <div>
-        <div class="cmd">/positions</div>
-        <div class="desc">查看我的所有開倉 & 近期平倉紀錄</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">✏️</div>
-      <div>
-        <div class="cmd">/tpsl [代號] [TP] [SL]</div>
-        <div class="desc">自訂止盈止損</div>
-        <div class="example">/tpsl BTC 105000 88000</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 三大指標解說 -->
-  <h2>📡 聰明錢三大指標（/smartmoney）</h2>
-  <div class="indicator-grid">
-    <div class="ind-card">
-      <div class="label">TOP LONG/SHORT RATIO</div>
-      <div class="name">頂級多空比</div>
-      <div class="explain">Binance 前 20% 資金量帳戶中，做多人數與做空人數的比值</div>
-      <div class="bull">▲ &gt;1.3 = 大戶偏多</div>
-      <div class="bear">▼ &lt;0.7 = 大戶偏空</div>
-    </div>
-    <div class="ind-card">
-      <div class="label">POSITION RATIO</div>
-      <div class="name">倉位比</div>
-      <div class="explain">同群大戶，多單持倉量 / 空單持倉量（看「錢」有多少，不只看人數）</div>
-      <div class="bull">▲ &gt;1.15 = 大戶多單佔優</div>
-      <div class="bear">▼ &lt;0.8 = 大戶空單佔優</div>
-    </div>
-    <div class="ind-card">
-      <div class="label">FUNDING RATE</div>
-      <div class="name">資金費率 (FR)</div>
-      <div class="explain">永續合約每 8 小時結算。正值多頭付費，負值空頭付費</div>
-      <div class="bull">▲ FR 負 = 空頭承壓，多頭有利</div>
-      <div class="bear">▼ FR 極正 = 多頭擠擁，注意回調</div>
-    </div>
-  </div>
-
-  <h3>信號解讀</h3>
-  <table>
-    <tr><th>信號</th><th>條件</th><th>意義</th></tr>
-    <tr><td>🐋 機構建多倉</td><td>頂級多空 &gt;1.3 + 倉位比 &gt;1.15 + FR 偏負</td><td>大戶在悄悄建多，可能是提前佈局</td></tr>
-    <tr><td>⚡ 軋空機會</td><td>頂級多空 &lt;0.7 + FR 正值（散戶強多）</td><td>大戶做空 vs 散戶做多，若轉多可能快速軋空</td></tr>
-    <tr><td>💎 多頭優勢</td><td>頂級多空 &gt;1.5 + FR 負（空頭付費）</td><td>大戶偏多且空頭在付費，多頭結構有利</td></tr>
-    <tr><td>🔻 極端空頭</td><td>多空比與倉位比都 &lt;0.8 + FR 負</td><td>全面看空，可能是反向指標或真的走空</td></tr>
-  </table>
-
-  <!-- 評分說明 -->
-  <h2>🏅 評分系統說明</h2>
-  <p style="color:#8b949e;margin-bottom:16px;">每個標的會綜合多個指標計算出一個 0–100 的總分，分數越高代表做多信號越強。</p>
-
-  <h3>加密貨幣評分組成</h3>
-  <table>
-    <tr><th>指標</th><th>說明</th><th>最高分</th></tr>
-    <tr><td>📐 結構分析</td><td>訂單塊（OB）+ 價值缺口（FVG）</td><td>佔 20%</td></tr>
-    <tr><td>📊 RSI</td><td>超賣區反彈潛力</td><td>佔 15%</td></tr>
-    <tr><td>🔔 布林帶</td><td>壓縮蓄勢偵測</td><td>佔 15%</td></tr>
-    <tr><td>💰 Funding Rate</td><td>空頭付費 = 多頭有利</td><td>佔 12%</td></tr>
-    <tr><td>📦 OI 變化</td><td>持倉量增加 + 價格上漲</td><td>佔 10%</td></tr>
-    <tr><td>🐋 頂級多空比</td><td>大戶偏向偵測</td><td>佔 8%</td></tr>
-    <tr><td>其他</td><td>成交量、Taker 比、多空比…</td><td>佔 20%</td></tr>
-  </table>
-
-  <h3>常見 Tag 說明</h3>
-  <div class="tag-row">
-    <span class="tag green">🔋 預備暴漲</span>
-    <span class="tag green">🎯 BB壓縮</span>
-    <span class="tag green">🤝 法人聯手</span>
-    <span class="tag green">💰 FR負值</span>
-    <span class="tag blue">⚡ 軋空機會</span>
-    <span class="tag blue">🏛️ RS領導股</span>
-    <span class="tag yellow">⚠️ 動能轉弱</span>
-    <span class="tag red">⚠️ 預備暴跌</span>
-    <span class="tag red">🔴 RSI過熱</span>
-  </div>
-
-  <!-- 訂閱推播 -->
-  <h2>🔔 自動推播</h2>
-  <div class="cmd-grid">
-    <div class="cmd-card">
-      <div class="icon">🔋</div>
-      <div>
-        <div class="cmd">/sub_pre</div>
-        <div class="desc">訂閱加密預警 — 每 30 分鐘自動推送高評分機會</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🇹🇼</div>
-      <div>
-        <div class="cmd">/tw_sub</div>
-        <div class="desc">訂閱台股早盤預警 — 每天 08:50 推送開盤前機會</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🇺🇸</div>
-      <div>
-        <div class="cmd">/us_sub</div>
-        <div class="desc">訂閱美股盤前預警 — 每天 21:00（台灣時間）推送</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🛑</div>
-      <div>
-        <div class="cmd">/tw_unsub / /us_unsub</div>
-        <div class="desc">取消訂閱對應市場的推播</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 個人化篩選 -->
-  <h2>🎛️ 個人化篩選</h2>
-  <div class="cmd-grid">
-    <div class="cmd-card">
-      <div class="icon">🎚️</div>
-      <div>
-        <div class="cmd">/set_score [數字]</div>
-        <div class="desc">設定總分門檻（預設 55）</div>
-        <div class="example">/set_score 65 （只看 65 分以上）</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🎚️</div>
-      <div>
-        <div class="cmd">/set_early [數字]</div>
-        <div class="desc">設定早期評分門檻（越低 = 越提前佈局）</div>
-        <div class="example">/set_early 30</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">📋</div>
-      <div>
-        <div class="cmd">/myfilters</div>
-        <div class="desc">查看我目前設定的篩選條件</div>
-      </div>
-    </div>
-    <div class="cmd-card">
-      <div class="icon">🔄</div>
-      <div>
-        <div class="cmd">/reset</div>
-        <div class="desc">重設所有篩選條件為預設值</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 注意事項 -->
-  <h2>⚠️ 使用注意事項</h2>
-  <div class="tip-box">
-    <div class="tip-icon">⚠️</div>
-    <p><strong>本 Bot 提供的所有信號僅供參考，不構成投資建議。</strong><br>
-    加密貨幣、台股、美股均有極高風險，請根據自己的風險承受能力做決策，任何交易損失概不負責。</p>
-  </div>
-  <div class="tip-box" style="background:#0d2d0d;border-color:#238636;">
-    <div class="tip-icon">✅</div>
-    <p>首次使用建議：先訂閱 <code>/sub_pre</code> 觀察推播信號幾天，了解 Bot 的篩選邏輯後，再配合 <code>/trade</code> 指令查看具體交易建議。</p>
-  </div>
-
+<!-- 市場選擇 -->
+<div class="market-nav">
+  <button class="mkt-btn active" onclick="showMarket('crypto')"><span class="mkt-icon">🪙</span>加密貨幣</button>
+  <button class="mkt-btn" onclick="showMarket('tw')"><span class="mkt-icon">🇹🇼</span>台股</button>
+  <button class="mkt-btn" onclick="showMarket('us')"><span class="mkt-icon">🇺🇸</span>美股</button>
+  <button class="mkt-btn" onclick="showMarket('general')"><span class="mkt-icon">🔍</span>通用功能</button>
+  <button class="mkt-btn" onclick="showMarket('personal')"><span class="mkt-icon">🎛️</span>個人化操作</button>
 </div>
+
+<div class="content">
+
+<!-- ═══ 加密貨幣 ═══ -->
+<div id="panel-crypto" class="market-panel active">
+
+  <div class="acc-item open">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">📋</span>所有指令</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <ul class="cmd-list">
+        <li><div><div class="cmd-name">/pre_pump</div><div class="cmd-alias">/prepump</div></div><div class="cmd-desc">🔋 預備暴漲榜 — 尚未大漲但評分高，提前佈局</div></li>
+        <li><div><div class="cmd-name">/pre_dump</div><div class="cmd-alias">/predump</div></div><div class="cmd-desc">⚠️ 預備暴跌榜 — 多空轉差，做空或避開</div></li>
+        <li><div><div class="cmd-name">/squeeze</div></div><div class="cmd-desc">🎯 布林帶壓縮榜 — 波動收窄蓄勢，即將爆發</div></li>
+        <li><div><div class="cmd-name">/confidence</div></div><div class="cmd-desc">🏆 高信心榜 — 多個指標同時看多</div></li>
+        <li><div><div class="cmd-name">/smartmoney</div></div><div class="cmd-desc">🐋 聰明錢偵測 — Binance 頂級交易者倉位異常</div></li>
+        <li><div><div class="cmd-name">/scan</div></div><div class="cmd-desc">🎛️ 個人化掃描 — 依你設定的門檻篩選</div></li>
+        <li><div><div class="cmd-name">/top10</div></div><div class="cmd-desc">🔟 綜合 Top 10 — 總評分最高 10 個幣</div></li>
+        <li><div><div class="cmd-name">/pump</div></div><div class="cmd-desc">📈 看多榜</div></li>
+        <li><div><div class="cmd-name">/dump</div></div><div class="cmd-desc">📉 看空榜</div></li>
+        <li><div><div class="cmd-name">/trade BTC</div></div><div class="cmd-desc">💡 完整交易建議 — 進場時機、止盈止損、風險評估</div></li>
+        <li><div><div class="cmd-name">/detail BTC</div></div><div class="cmd-desc">🔍 所有原始數據一次看</div></li>
+        <li><div><div class="cmd-name">/structure BTC</div></div><div class="cmd-desc">📐 OB + FVG 結構分析</div></li>
+      </ul>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">🏅</span>評分系統</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <p style="color:#8b949e;font-size:.85rem;margin-bottom:12px">每個幣綜合多個指標計算 0–100 總分，分數越高代表做多信號越強。</p>
+      <table class="score-table">
+        <tr><th>指標</th><th>佔比</th><th>說明</th></tr>
+        <tr><td>🏛️ 法人動向</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:35%"></div></div>35%</td><td>OB+FVG 訂單結構分析</td></tr>
+        <tr><td>📊 RSI</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:15%"></div></div>15%</td><td>超賣區反彈潛力</td></tr>
+        <tr><td>🎯 布林帶 BB</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:15%"></div></div>15%</td><td>壓縮蓄勢偵測</td></tr>
+        <tr><td>💰 Funding Rate</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:12%"></div></div>12%</td><td>空頭付費 = 多頭有利</td></tr>
+        <tr><td>📦 OI 變化</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:10%"></div></div>10%</td><td>持倉量增加 + 價格上漲</td></tr>
+        <tr><td>🐋 頂級多空比</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:8%"></div></div>8%</td><td>Binance 大戶偏向偵測</td></tr>
+        <tr><td>📐 OB+FVG 結構</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:8%"></div></div>8%</td><td>訂單塊 + 價值缺口</td></tr>
+        <tr><td>其他</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:7%"></div></div>7%</td><td>成交量、Taker 比、多空比</td></tr>
+      </table>
+      <div class="tip">💡 <span><b>早分（Early Score）</b>是什麼？<br>由 BB壓縮、成交量、ATR 等「尚未啟動」的指標組成，早分高代表「還沒大漲但蓄勢完成」，是提前佈局的關鍵信號。</span></div>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">📡</span>指標解說</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <div class="ind-grid">
+        <div class="ind-card">
+          <div class="ind-name">🎯 BB <span class="tag-pill tag-blue">布林帶</span></div>
+          <div class="ind-full">Bollinger Bands</div>
+          <div class="ind-desc">以 20 日均線為中軌，上下各加減 2 倍標準差。當上下軌收窄（壓縮）代表市場蓄勢，即將大幅波動。</div>
+          <div class="bull">▲ 壓縮後向上突破 = 多頭啟動</div>
+          <div class="bear">▼ 壓縮後向下跌破 = 空頭啟動</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">📐 OB <span class="tag-pill tag-blue">訂單塊</span></div>
+          <div class="ind-full">Order Block</div>
+          <div class="ind-desc">機構下大單前的最後一根反向 K 線，代表機構進場的價格區間，之後常作為強支撐或強阻力。</div>
+          <div class="bull">▲ 價格回測 OB 多頭區域 = 買點</div>
+          <div class="bear">▼ 跌破 OB = 結構轉空</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">📐 FVG <span class="tag-pill tag-blue">價值缺口</span></div>
+          <div class="ind-full">Fair Value Gap</div>
+          <div class="ind-desc">三根 K 線快速移動時留下的缺口，市場傾向回填此缺口，代表潛在支撐/阻力區。</div>
+          <div class="bull">▲ 在 FVG 支撐區止跌 = 做多機會</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">💰 FR <span class="tag-pill tag-blue">資金費率</span></div>
+          <div class="ind-full">Funding Rate</div>
+          <div class="ind-desc">永續合約每 8 小時結算一次。正值代表多頭付費給空頭，負值反之。極端值是反向指標。</div>
+          <div class="bull">▲ FR 負值 = 空頭承壓，多頭有利</div>
+          <div class="bear">▼ FR 極正 = 多頭擁擠，注意回調</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">📦 OI <span class="tag-pill tag-blue">未平倉量</span></div>
+          <div class="ind-full">Open Interest</div>
+          <div class="ind-desc">市場上所有未平倉合約的總量（以 USDT 計價）。OI 增加代表新資金進場，反之代表離場。</div>
+          <div class="bull">▲ OI 增加 + 價格上漲 = 多頭建倉</div>
+          <div class="bear">▼ OI 增加 + 價格下跌 = 空頭建倉</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">📊 RSI <span class="tag-pill tag-blue">相對強弱</span></div>
+          <div class="ind-full">Relative Strength Index</div>
+          <div class="ind-desc">0–100 的動能指標。低於 30 = 超賣（可能反彈），高於 70 = 超買（可能回調）。</div>
+          <div class="bull">▲ RSI &lt; 30 從超賣回升 = 買點</div>
+          <div class="bear">▼ RSI &gt; 75 = 過熱警示</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">🐋 頂級多空比</div>
+          <div class="ind-full">Top Long/Short Ratio (Binance 前 20%)</div>
+          <div class="ind-desc">Binance 資金量前 20% 帳戶的做多/做空人數比值，代表「聰明錢」的傾向。</div>
+          <div class="bull">▲ &gt; 1.3 = 大戶偏多</div>
+          <div class="bear">▼ &lt; 0.7 = 大戶偏空</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">🎚️ ATR <span class="tag-pill tag-blue">波動率</span></div>
+          <div class="ind-full">Average True Range</div>
+          <div class="ind-desc">過去 N 天的平均波幅，用來判斷當前波動是否擴張（即將啟動行情）。</div>
+          <div class="bull">▲ ATR 突然擴張 = 行情可能啟動</div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">🐋</span>聰明錢信號解說</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <table class="score-table">
+        <tr><th>信號</th><th>條件</th><th>意義</th></tr>
+        <tr><td>🐋 機構建多倉</td><td>頂級多空 &gt;1.3 + 倉位比 &gt;1.15</td><td>大戶在悄悄建多，可能是提前佈局</td></tr>
+        <tr><td>⚡ 軋空機會</td><td>頂級多空 &lt;0.7 + FR 正值</td><td>大戶做空但散戶強多，轉多可能快速軋空</td></tr>
+        <tr><td>💎 多頭優勢</td><td>頂級多空 &gt;1.5 + FR 負</td><td>大戶偏多且空頭在付費，多頭結構有利</td></tr>
+        <tr><td>🔻 極端空頭</td><td>多空比與倉位比都 &lt;0.8 + FR 負</td><td>全面看空，留意是否為反向指標</td></tr>
+      </table>
+    </div></div>
+  </div>
+</div>
+
+<!-- ═══ 台股 ═══ -->
+<div id="panel-tw" class="market-panel">
+
+  <div class="acc-item open">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">📋</span>所有指令</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <ul class="cmd-list">
+        <li><div><div class="cmd-name">/tw_scan</div><div class="cmd-alias">/twscan</div></div><div class="cmd-desc">🔋 台股預備暴漲榜 — 法人買超 + 技術蓄勢</div></li>
+        <li><div><div class="cmd-name">/tw_squeeze</div><div class="cmd-alias">/twsqueeze</div></div><div class="cmd-desc">🎯 BB 壓縮蓄勢榜</div></li>
+        <li><div><div class="cmd-name">/tw_foreign</div><div class="cmd-alias">/twforeign</div></div><div class="cmd-desc">🏦 外資連買榜 — 連續買超天數排行</div></li>
+        <li><div><div class="cmd-name">/tw_joint</div><div class="cmd-alias">/twjoint</div></div><div class="cmd-desc">🤝 法人聯手榜 — 外資 + 投信同時買超（最強信號）</div></li>
+        <li><div><div class="cmd-name">/tw_top10</div><div class="cmd-alias">/twtop10</div></div><div class="cmd-desc">🔟 台股綜合 Top 10</div></li>
+        <li><div><div class="cmd-name">/tw_trade 2330</div><div class="cmd-alias">/twtrade 2330</div></div><div class="cmd-desc">💡 個股完整交易建議</div></li>
+        <li><div><div class="cmd-name">/tw_detail 2330</div><div class="cmd-alias">/twdetail 2330</div></div><div class="cmd-desc">🔍 個股詳細指標</div></li>
+        <li><div><div class="cmd-name">/tw_status</div><div class="cmd-alias">/twstatus</div></div><div class="cmd-desc">🤖 台股 Bot 狀態</div></li>
+        <li><div><div class="cmd-name">/tw_sub</div><div class="cmd-alias">/twsub</div></div><div class="cmd-desc">🔔 訂閱台股早盤預警（每日 08:50）</div></li>
+      </ul>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">🏅</span>評分系統</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <table class="score-table">
+        <tr><th>指標</th><th>佔比</th><th>說明</th></tr>
+        <tr><td>🏦 法人動向</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:35%"></div></div>35%</td><td>外資 + 投信買賣超金額（最重要）</td></tr>
+        <tr><td>💳 融資融券</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:15%"></div></div>15%</td><td>融資增加 = 散戶追多；融券增加 = 空頭壓力</td></tr>
+        <tr><td>🎯 布林帶 BB</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:12%"></div></div>12%</td><td>壓縮蓄勢偵測</td></tr>
+        <tr><td>📊 量能階梯</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:8%"></div></div>8%</td><td>成交量逐步放大，代表資金流入</td></tr>
+        <tr><td>😴 沉睡甦醒</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:8%"></div></div>8%</td><td>長期低量後突然放量，資金進場信號</td></tr>
+        <tr><td>🎚️ ATR 擴張</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:7%"></div></div>7%</td><td>波動率擴張，行情啟動前兆</td></tr>
+        <tr><td>📐 OB+FVG</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:8%"></div></div>8%</td><td>訂單塊 + 價值缺口結構分析</td></tr>
+        <tr><td>📉 CVD 背離</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:7%"></div></div>7%</td><td>累積成交量差異，偵測隱性買賣壓</td></tr>
+      </table>
+      <div class="tip">💡 <span><b>法人聯手信號（🤝）</b>：外資 + 投信同時買超，且外資連買 2 天以上，+20 分加成。這是台股最強的確認信號之一。</span></div>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">📡</span>指標解說</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <div class="ind-grid">
+        <div class="ind-card">
+          <div class="ind-name">🏦 外資</div>
+          <div class="ind-full">Foreign Institutional Investors (FINI)</div>
+          <div class="ind-desc">外國法人（基金、投行）的買賣超金額。連續買超天數越多，信號越強。</div>
+          <div class="bull">▲ 連買 3 天以上 = 強多信號</div>
+          <div class="bear">▼ 轉賣 = 注意停損</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">🏛️ 投信</div>
+          <div class="ind-full">Domestic Investment Trust</div>
+          <div class="ind-desc">國內投信基金的買賣超。投信通常在月底作帳，季底影響力更大。</div>
+          <div class="bull">▲ 投信 + 外資同買 = 法人聯手</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">💳 融資</div>
+          <div class="ind-full">Margin Trading</div>
+          <div class="ind-desc">散戶向券商借錢買股。融資大增代表散戶追多，往往是短期高點警訊。</div>
+          <div class="bull">▲ 低融資 + 股價上漲 = 法人推動</div>
+          <div class="bear">▼ 融資暴增 = 小心散戶追高</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">📉 融券</div>
+          <div class="ind-full">Short Selling</div>
+          <div class="ind-desc">借股賣出的空頭部位。融券增加代表空頭壓力，但也是潛在軋空來源。</div>
+          <div class="bull">▲ 高融券 + 股價強 = 軋空潛力</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">📉 CVD 背離</div>
+          <div class="ind-full">Cumulative Volume Delta</div>
+          <div class="ind-desc">主動買量與主動賣量的累積差值。CVD 上升但價格不漲 = 隱性買盤。</div>
+          <div class="bull">▲ CVD 向上背離 = 潛在多頭</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">😴 沉睡甦醒</div>
+          <div class="ind-full">Sleeping Wake Signal</div>
+          <div class="ind-desc">長期低量橫盤後，成交量突然放大到歷史均量 2 倍以上，代表資金開始注意此股。</div>
+          <div class="bull">▲ 觸發沉睡甦醒 = 關注訊號</div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<!-- ═══ 美股 ═══ -->
+<div id="panel-us" class="market-panel">
+
+  <div class="acc-item open">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">📋</span>所有指令</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <ul class="cmd-list">
+        <li><div><div class="cmd-name">/us_scan</div><div class="cmd-alias">/usscan</div></div><div class="cmd-desc">🔋 美股預備暴漲榜</div></li>
+        <li><div><div class="cmd-name">/us_squeeze</div><div class="cmd-alias">/ussqueeze</div></div><div class="cmd-desc">🎯 BB 壓縮蓄勢榜</div></li>
+        <li><div><div class="cmd-name">/us_short</div><div class="cmd-alias">/usshort</div></div><div class="cmd-desc">⚡ 軋空候選 — 高空頭比 + 技術轉強</div></li>
+        <li><div><div class="cmd-name">/us_momentum</div><div class="cmd-alias">/usmomentum</div></div><div class="cmd-desc">🚀 動能榜 — RSI + 均線</div></li>
+        <li><div><div class="cmd-name">/us_rs</div><div class="cmd-alias">/usrs</div></div><div class="cmd-desc">📊 RS Rating 領導股榜</div></li>
+        <li><div><div class="cmd-name">/us_accum</div><div class="cmd-alias">/usaccum</div></div><div class="cmd-desc">🏛️ 法人累積榜 — A/D Ratio 高</div></li>
+        <li><div><div class="cmd-name">/us_top10</div><div class="cmd-alias">/ustop10</div></div><div class="cmd-desc">🔟 美股綜合 Top 10</div></li>
+        <li><div><div class="cmd-name">/us_trade AAPL</div><div class="cmd-alias">/ustrade AAPL</div></div><div class="cmd-desc">💡 個股完整交易建議</div></li>
+        <li><div><div class="cmd-name">/us_detail AAPL</div><div class="cmd-alias">/usdetail AAPL</div></div><div class="cmd-desc">🔍 個股詳細指標</div></li>
+        <li><div><div class="cmd-name">/us_sub</div><div class="cmd-alias">/ussub</div></div><div class="cmd-desc">🔔 訂閱美股盤前預警（每日 20:30 台灣時間）</div></li>
+      </ul>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">🏅</span>評分系統</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <table class="score-table">
+        <tr><th>指標</th><th>最高分</th><th>說明</th></tr>
+        <tr><td>📊 RS Rating</td><td>15 分</td><td>IBD 風格 1 年相對強度，百分位 0-99</td></tr>
+        <tr><td>🏛️ A/D Ratio</td><td>15 分</td><td>上漲日成交量 / 下跌日成交量，法人累積指標</td></tr>
+        <tr><td>🎯 布林帶 BB</td><td>15 分</td><td>壓縮蓄勢偵測</td></tr>
+        <tr><td>🚀 動能</td><td>15 分</td><td>RSI + 均線多頭排列</td></tr>
+        <tr><td>⚡ 軋空潛力</td><td>15 分</td><td>高空頭比 + 技術轉強</td></tr>
+        <tr><td>🏦 法人持股</td><td>10 分</td><td>機構持股比例（背景異步載入）</td></tr>
+        <tr><td>📐 OB+FVG</td><td>10 分</td><td>訂單塊 + 價值缺口結構</td></tr>
+        <tr><td>🎚️ ATR 擴張</td><td>5 分</td><td>波動率擴張</td></tr>
+      </table>
+      <div class="tip">💡 <span><b>RS Rating</b>（相對強度評分）是 IBD 投資法的核心指標，0-99 分，代表過去 1 年這支股票相對所有股票的強弱百分位。RS 85 以上表示打敗了 85% 的股票，是強勢股的關鍵門檻。</span></div>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">📡</span>指標解說</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <div class="ind-grid">
+        <div class="ind-card">
+          <div class="ind-name">📊 RS Rating</div>
+          <div class="ind-full">Relative Strength Rating (IBD 風格)</div>
+          <div class="ind-desc">計算過去 1 年股票報酬率相對所有掃描股的百分位排名。RS 85 = 打敗 85% 的股票。</div>
+          <div class="bull">▲ RS ≥ 85 = 強勢領導股</div>
+          <div class="bear">▼ RS &lt; 50 = 表現落後</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">🏛️ A/D Ratio</div>
+          <div class="ind-full">Accumulation/Distribution Ratio</div>
+          <div class="ind-desc">上漲日的成交量總和 / 下跌日的成交量總和。比值大於 1.2 代表法人在悄悄買入（累積）。</div>
+          <div class="bull">▲ A/D &gt; 1.2 = 法人在買</div>
+          <div class="bear">▼ A/D &lt; 0.8 = 法人在賣</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">⚡ Short Float</div>
+          <div class="ind-full">Short Interest % of Float</div>
+          <div class="ind-desc">流通股中被放空的比例。空頭比例高 + 股價突然強勢，容易引發軋空（Short Squeeze）。</div>
+          <div class="bull">▲ 高空頭比 + 轉強 = 軋空潛力</div>
+        </div>
+        <div class="ind-card">
+          <div class="ind-name">🏦 法人持股</div>
+          <div class="ind-full">Institutional Ownership %</div>
+          <div class="ind-desc">基金、機構投資人持有的股份比例。法人持股高代表獲得機構認可，但首次啟動前往往尚未被持有。</div>
+          <div class="bull">▲ 持股 ≥ 60% = 機構認可</div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<!-- ═══ 通用功能 ═══ -->
+<div id="panel-general" class="market-panel">
+  <div class="acc-item open">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">🔍</span>通用查詢</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <div class="tip">💡 <span><b>/stock</b> 會自動判斷市場：數字代號 = 台股，英文 = 美股，幣種縮寫 = 加密貨幣</span></div>
+      <ul class="cmd-list">
+        <li><div class="cmd-name">/stock 2330</div><div class="cmd-desc">查台積電（台股）</div></li>
+        <li><div class="cmd-name">/stock BTC</div><div class="cmd-desc">查比特幣（加密）</div></li>
+        <li><div class="cmd-name">/stock NVDA</div><div class="cmd-desc">查輝達（美股）</div></li>
+        <li><div class="cmd-name">/status</div><div class="cmd-desc">查看 Bot 運作狀態、快取時間、掃描幣數</div></li>
+      </ul>
+    </div></div>
+  </div>
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">⭐</span>自選股 & 警報</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <ul class="cmd-list">
+        <li><div class="cmd-name">/watch BTC</div><div class="cmd-desc">加入自選股，Bot 每 30 分鐘自動監控，條件觸發時主動通知</div></li>
+        <li><div class="cmd-name">/unwatch BTC</div><div class="cmd-desc">移除自選股</div></li>
+        <li><div class="cmd-name">/mywatchlist</div><div class="cmd-desc">查看我的自選股即時狀態與評分</div></li>
+        <li><div class="cmd-name">/alert foreign 3</div><div class="cmd-desc">設定外資連買達 3 天時通知</div></li>
+        <li><div class="cmd-name">/alert pre 70</div><div class="cmd-desc">設定評分達 70 分時通知</div></li>
+      </ul>
+    </div></div>
+  </div>
+</div>
+
+<!-- ═══ 個人化操作 ═══ -->
+<div id="panel-personal" class="market-panel">
+  <div class="acc-item open">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">🎛️</span>篩選設定</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <div class="tip">💡 <span>每個用戶有獨立設定，重部署後保留。</span></div>
+      <ul class="cmd-list">
+        <li><div><div class="cmd-name">/set_score 55</div><div class="cmd-alias">/setscore 55</div></div><div class="cmd-desc">最低總分門檻（預設 55）。提高 = 只看最強信號；降低 = 看更多機會</div></li>
+        <li><div><div class="cmd-name">/set_early 40</div><div class="cmd-alias">/setearly 40</div></div><div class="cmd-desc">最低早分門檻（預設 40）。降低可以更提前佈局，但雜訊也較多</div></li>
+        <li><div><div class="cmd-name">/set_max_change 15</div><div class="cmd-alias">/setmax 15</div></div><div class="cmd-desc">最大已動幅度（預設 15%）。超過此值的標的視為「已啟動，太晚了」，不納入榜單</div></li>
+        <li><div class="cmd-name">/myfilters</div><div class="cmd-desc">查看目前的個人篩選設定</div></li>
+        <li><div class="cmd-name">/reset</div><div class="cmd-desc">重設所有篩選條件為預設值</div></li>
+      </ul>
+      <div class="sec-title">建議設定</div>
+      <table class="score-table">
+        <tr><th>風格</th><th>總分</th><th>早分</th><th>最大已動</th></tr>
+        <tr><td>🛡️ 保守型</td><td>≥ 65</td><td>≥ 45</td><td>≤ 10%</td></tr>
+        <tr><td>⚖️ 平衡型（預設）</td><td>≥ 55</td><td>≥ 40</td><td>≤ 15%</td></tr>
+        <tr><td>⚡ 激進型</td><td>≥ 45</td><td>≥ 30</td><td>≤ 20%</td></tr>
+      </table>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">📥</span>倉位追蹤</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <div class="tip">💡 <span>Bot 自動計算 TP/SL，並每 30 分鐘背景監控。觸及 TP/SL 自動推播通知。重部署後倉位資料保留。</span></div>
+      <ul class="cmd-list">
+        <li><div class="cmd-name">/enter BTC 95000 l 10</div><div class="cmd-desc">進場記錄。格式：代號 價格 方向(l=多/s=空) 槓桿倍數（現貨省略）</div></li>
+        <li><div class="cmd-name">/close BTC 98000</div><div class="cmd-desc">手動平倉，Bot 自動計算盈虧。有多筆同標的會顯示選擇選單</div></li>
+        <li><div class="cmd-name">/positions</div><div class="cmd-desc">查看所有開倉 & 近期平倉紀錄</div></li>
+        <li><div class="cmd-name">/tpsl BTC 105000 88000</div><div class="cmd-desc">自訂止盈（105000）和止損（88000）價格</div></li>
+      </ul>
+      <div class="sec-title">Trailing Stop 機制</div>
+      <p style="color:#c9d1d9;font-size:.85rem">多單現價創新高時，止損線自動上移至「進場價 + 漲幅的 50%」，鎖定部分利潤。空單反之。</p>
+    </div></div>
+  </div>
+
+  <div class="acc-item">
+    <div class="acc-header" onclick="toggleAcc(this)">
+      <span><span class="acc-icon">🔔</span>訂閱推播</span><span class="acc-arrow">▼</span>
+    </div>
+    <div class="acc-body"><div class="acc-inner">
+      <div class="tip">💡 <span>輸入 <b>/sub</b> 會出現訂閱管理面板，點按鈕直接切換，不需記指令。</span></div>
+      <ul class="cmd-list">
+        <li><div class="cmd-name">/sub</div><div class="cmd-desc">🎛️ 打開訂閱管理面板（推薦！）</div></li>
+        <li><div><div class="cmd-name">/sub_pre</div><div class="cmd-alias">/subpre</div></div><div class="cmd-desc">加密預警，每 30 分鐘推送預備暴漲/暴跌榜</div></li>
+        <li><div><div class="cmd-name">/tw_sub</div><div class="cmd-alias">/twsub</div></div><div class="cmd-desc">台股早盤預警，每日 08:50</div></li>
+        <li><div><div class="cmd-name">/us_sub</div><div class="cmd-alias">/ussub</div></div><div class="cmd-desc">美股盤前預警，每日 20:30（台灣時間）</div></li>
+        <li><div><div class="cmd-name">/unsub_all</div><div class="cmd-alias">/unsuball</div></div><div class="cmd-desc">取消全部訂閱</div></li>
+      </ul>
+    </div></div>
+  </div>
+</div>
+
+</div><!-- end content -->
 
 <footer>
-  <p>妖幣雷達 V2.3 &nbsp;|&nbsp; 多市場交易機器人使用說明</p>
-  <p style="margin-top:6px;">Powered by Binance API · TWSE · Yahoo Finance</p>
+  <p>妖幣雷達 V2.3 &nbsp;·&nbsp; 多市場 Telegram 交易機器人</p>
+  <p style="margin-top:6px">Powered by Binance API · TWSE · Yahoo Finance &nbsp;|&nbsp; <a href="https://github.com/xiang14786/yaobi-bot">GitHub</a></p>
+  <p style="margin-top:10px;color:#6e7681;font-size:.78rem">⚠️ 本工具提供的所有信號僅供參考，不構成投資建議，任何交易風險請自行承擔</p>
 </footer>
 
+<script>
+function showMarket(id) {
+  document.querySelectorAll('.market-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.mkt-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel-' + id).classList.add('active');
+  event.currentTarget.classList.add('active');
+}
+function toggleAcc(header) {
+  const item = header.parentElement;
+  item.classList.toggle('open');
+}
+// 預設展開第一個 accordion
+document.querySelectorAll('.market-panel').forEach(panel => {
+  const first = panel.querySelector('.acc-item');
+  if (first) first.classList.add('open');
+});
+</script>
 </body>
 </html>
