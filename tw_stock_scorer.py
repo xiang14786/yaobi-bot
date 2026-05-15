@@ -299,16 +299,25 @@ def score_institutional(
         score += min(20, foreign_streak * 3)
     elif foreign_streak <= -5 and direction == "bear":
         score += min(20, abs(foreign_streak) * 3)
-    # 投信買超額外加分
+    # 投信買超額外加分（提高至 25 分，投信是重要籌碼）
     trust_ratio = trust_net / trade_value if trade_value > 0 else 0
-    if trust_ratio > 0.01 and direction == "bull":
-        score += 15
+    if trust_ratio > 0.02 and direction == "bull":
+        score += 25   # 投信大買
+    elif trust_ratio > 0.01 and direction == "bull":
+        score += 18
+    elif trust_ratio < -0.02 and direction == "bear":
+        score += 25
     elif trust_ratio < -0.01 and direction == "bear":
-        score += 15
-    # 三大法人同向加分
-    signs = [1 if x > 0 else -1 for x in [foreign_net, trust_net, dealer_net] if x != 0]
-    if len(set(signs)) == 1 and signs:
-        score += 15   # 三方同向
+        score += 18
+    # 法人聯手加分（外資+投信同向，最強信號）
+    is_joint_bull = foreign_net > 0 and trust_net > 0
+    is_joint_bear = foreign_net < 0 and trust_net < 0
+    if is_joint_bull and direction == "bull":
+        score += 20   # 法人聯手買
+    elif is_joint_bear and direction == "bear":
+        score += 20
+    elif dealer_net > 0 and direction == "bull":
+        score += 5    # 三大同向
     return min(100, score), direction
 
 
@@ -420,6 +429,13 @@ def score_tw_stock(raw: TwStockData) -> TwStockMetrics:
             m.tags.append("🏦外資連買")
     elif raw.foreign_net < 0:
         m.triggers.append(f"🏦 外資賣超 {raw.foreign_net/1e8:+.1f} 億")
+    # 投信動向
+    if raw.trust_net > 0:
+        m.triggers.append(f"📊 投信買超 {raw.trust_net/1e8:+.2f} 億")
+        if raw.foreign_net > 0:
+            m.tags.append("🤝法人聯手")
+    elif raw.trust_net < 0:
+        m.triggers.append(f"📊 投信賣超 {raw.trust_net/1e8:+.2f} 億")
 
     # 8. 融資融券
     m.score_margin, margin_dir = score_margin_trading(
@@ -434,13 +450,13 @@ def score_tw_stock(raw: TwStockData) -> TwStockMetrics:
 
     # ── 綜合評分（加權平均）──
     weights = {
-        "bb":          0.15,
-        "vol_ladder":  0.10,
-        "sleep":       0.10,
-        "atr":         0.08,
-        "cvd":         0.08,
-        "ob_fvg":      0.09,
-        "institution": 0.25,   # 法人動向最重
+        "bb":          0.12,
+        "vol_ladder":  0.08,
+        "sleep":       0.08,
+        "atr":         0.07,
+        "cvd":         0.07,
+        "ob_fvg":      0.08,
+        "institution": 0.35,   # 法人動向最重（升至 35%）
         "margin":      0.15,
     }
     m.total_score = (
@@ -565,5 +581,15 @@ def find_tw_squeeze(metrics: list[TwStockMetrics]) -> list[TwStockMetrics]:
     return [m for m in metrics if m.score_bb >= 60]
 
 def find_tw_institutional_buy(metrics: list[TwStockMetrics]) -> list[TwStockMetrics]:
-    """外資連續買超"""
+    """外資連續買超（≥3天）"""
     return [m for m in metrics if m.foreign_streak >= 3 and m.foreign_net > 0]
+
+def find_tw_joint_buy(metrics: list[TwStockMetrics]) -> list[TwStockMetrics]:
+    """法人聯手榜：外資 + 投信同日淨買超，且外資連買 ≥ 2 天"""
+    return [
+        m for m in metrics
+        if m.foreign_net > 0
+        and m.foreign_streak >= 2
+        and "🤝法人聯手" in m.tags
+        and m.total_score >= 40
+    ]

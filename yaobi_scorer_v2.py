@@ -30,15 +30,16 @@ BINANCE_API = "https://api.binance.com"
 
 # 升級後權重 - 領先指標佔比最高
 WEIGHTS_V2 = {
-    "early_warning":  0.30,   # 提早預警 (最關鍵)
-    "structure":      0.18,   # OB + FVG 結構
-    "price_momentum": 0.08,   # 降低,因為已動 = 已晚
-    "volume_anomaly": 0.10,
+    "early_warning":  0.28,   # 提早預警 (最關鍵)
+    "structure":      0.16,   # OB + FVG 結構
+    "price_momentum": 0.07,   # 降低,因為已動 = 已晚
+    "volume_anomaly": 0.09,
     "funding_rate":   0.10,
-    "long_short":     0.06,
+    "long_short":     0.05,
+    "top_trader":     0.08,   # 頂級交易者多空比 (新增)
     "liquidation":    0.06,
     "sentiment":      0.06,
-    "on_chain":       0.06,
+    "on_chain":       0.05,
 }
 
 DEFAULT_FILTERS_V2 = {
@@ -88,6 +89,11 @@ class CoinMetricsV2:
     triggers: list = field(default_factory=list)
     nearest_support: float = 0.0
     nearest_resistance: float = 0.0
+
+    # Top trader 多空比（帳戶 + 倉位）
+    top_trader_ls_ratio: float = 1.0    # >1 多頭偏向, <1 空頭偏向
+    top_trader_pos_ratio: float = 1.0
+    score_top_trader: float = 0.0
 
     total_score: float = 0.0
     direction: str = "NEUTRAL"
@@ -151,6 +157,26 @@ class BinanceClientV2:
         except Exception:
             return []
 
+    async def get_top_trader_ls(self, symbol, period="15m", limit=12):
+        """頂級交易者帳戶多空比（比全局更有參考價值）"""
+        try:
+            return await self._get(
+                f"{BINANCE_FAPI}/futures/data/topLongShortAccountRatio",
+                {"symbol": symbol, "period": period, "limit": limit},
+            )
+        except Exception:
+            return []
+
+    async def get_top_trader_pos(self, symbol, period="15m", limit=12):
+        """頂級交易者倉位多空比（持倉量）"""
+        try:
+            return await self._get(
+                f"{BINANCE_FAPI}/futures/data/topLongShortPositionRatio",
+                {"symbol": symbol, "period": period, "limit": limit},
+            )
+        except Exception:
+            return []
+
     async def get_klines(self, symbol, interval="15m", limit=100):
         return await self._get(
             f"{BINANCE_FAPI}/fapi/v1/klines",
@@ -198,6 +224,26 @@ def score_sentiment(tr):
 
 def score_onchain_proxy(vol, pc):
     return min(100, math.log10(max(vol, 1) / 1e6) * 8 + min(20, abs(pc)))
+
+
+def score_top_trader(ls_ratio: float, pos_ratio: float) -> float:
+    """
+    頂級交易者多空比評分 (0~100)
+    ls_ratio > 1 = 頂級交易者偏多，< 1 = 偏空
+    pos_ratio > 1 = 頂級持倉偏多
+    極端偏向時分數最高（多空失衡 = 軋倉機會）
+    """
+    if ls_ratio <= 0:
+        return 0
+    # 轉成 -1 ~ 1 的偏向度
+    bias_ls  = math.log(ls_ratio)   # 正 = 偏多, 負 = 偏空
+    bias_pos = math.log(pos_ratio) if pos_ratio > 0 else 0
+    # 兩個維度一致時加分
+    combined = (abs(bias_ls) + abs(bias_pos)) / 2
+    # 同向加分
+    if (bias_ls > 0) == (bias_pos > 0):
+        combined *= 1.3
+    return min(100, combined * 120)
 
 
 # ============================================================
@@ -257,9 +303,11 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
                     client.get_long_short_history(sym, "15m", 12),
                     client.get_taker_history(sym, "15m", 20),
                     client.get_open_interest(sym),
+                    client.get_top_trader_ls(sym, "15m", 12),
+                    client.get_top_trader_pos(sym, "15m", 12),
                     return_exceptions=True,
                 )
-                k15_raw, k1h_raw, k4h_raw, oi_hist, fund_hist, ls_hist, taker_hist, oi_now = results
+                k15_raw, k1h_raw, k4h_raw, oi_hist, fund_hist, ls_hist, taker_hist, oi_now, tt_ls_raw, tt_pos_raw = results
 
                 k15 = parse_klines(k15_raw) if isinstance(k15_raw, list) else []
                 k1h = parse_klines(k1h_raw) if isinstance(k1h_raw, list) else []
@@ -289,6 +337,14 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
                     taker_history = [float(x.get("buySellRatio", 1)) for x in taker_hist]
                 if taker_history:
                     m.taker_buy_sell_ratio = taker_history[-1]
+
+                # Top Trader 多空比（帳戶比 + 倉位比）
+                if isinstance(tt_ls_raw, list) and tt_ls_raw:
+                    tt_ratios = [float(x.get("longShortRatio", 1)) for x in tt_ls_raw]
+                    m.top_trader_ls_ratio = tt_ratios[-1]
+                if isinstance(tt_pos_raw, list) and tt_pos_raw:
+                    tt_pos = [float(x.get("longShortRatio", 1)) for x in tt_pos_raw]
+                    m.top_trader_pos_ratio = tt_pos[-1]
 
                 # 當前 OI
                 if isinstance(oi_now, dict):
@@ -342,15 +398,17 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
             m.score_liq = score_liquidation(m.liquidation_24h, m.open_interest_usd)
             m.score_sentiment = score_sentiment(m.taker_buy_sell_ratio)
             m.score_onchain = score_onchain_proxy(m.quote_volume, m.price_change_pct)
+            m.score_top_trader = score_top_trader(m.top_trader_ls_ratio, m.top_trader_pos_ratio)
 
             # === 加權總分 V2 ===
             m.total_score = (
-                m.score_early     * WEIGHTS_V2["early_warning"]
+                m.score_early       * WEIGHTS_V2["early_warning"]
                 + m.score_structure * WEIGHTS_V2["structure"]
                 + m.score_price     * WEIGHTS_V2["price_momentum"]
                 + m.score_volume    * WEIGHTS_V2["volume_anomaly"]
                 + m.score_funding   * WEIGHTS_V2["funding_rate"]
                 + m.score_ls        * WEIGHTS_V2["long_short"]
+                + m.score_top_trader * WEIGHTS_V2["top_trader"]
                 + m.score_liq       * WEIGHTS_V2["liquidation"]
                 + m.score_sentiment * WEIGHTS_V2["sentiment"]
                 + m.score_onchain   * WEIGHTS_V2["on_chain"]
@@ -375,6 +433,10 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
                 m.tags.append("極端費率")
             if m.long_short_ratio > 3 or m.long_short_ratio < 0.33:
                 m.tags.append("多空失衡")
+            if m.top_trader_ls_ratio > 2.5:
+                m.tags.append("🐋 頂級多頭極端")
+            elif m.top_trader_ls_ratio < 0.4:
+                m.tags.append("🐋 頂級空頭極端")
             if m.score_structure > 70:
                 m.tags.append("結構共振")
             if abs(m.price_change_pct) < 5 and m.score_early > 50:
@@ -471,3 +533,34 @@ async def _test():
 
 if __name__ == "__main__":
     asyncio.run(_test())
+
+
+def find_smart_money(coins: list) -> list:
+    """
+    聰明錢榜單：頂級交易者極端偏向 + OI 增加 + 尚未啟動
+    頂級交易者大幅偏多/空且與市場方向相反 = 逆向指標警示
+    或頂級交易者偏多 + OI暴增 + 未大漲 = 機構建倉
+    """
+    result = []
+    for c in coins:
+        tt = c.top_trader_ls_ratio
+        pos = c.top_trader_pos_ratio
+        # 機構建倉信號：頂級偏多 + OI高 + 未大漲 + 評分高
+        if (tt > 1.5 and pos > 1.3
+                and abs(c.price_change_pct) < 5
+                and c.open_interest_usd > 5e7
+                and c.score_early > 30):
+            c._smart_reason = f"🐋 機構建多倉 (頂級多空={tt:.2f}, 倉位比={pos:.2f})"
+            result.append(c)
+        # 逆向警示：頂級極端偏空但 funding 正值（散戶強多）→ 軋空機會
+        elif (tt < 0.5 and c.funding_rate > 0.0005
+              and abs(c.price_change_pct) < 8):
+            c._smart_reason = f"⚡ 軋空機會 (頂級空={tt:.2f}, FR={c.funding_rate*100:.3f}%)"
+            result.append(c)
+        # 頂級極端偏多 + FR 負（空頭付費）= 多頭有利
+        elif (tt > 2.0 and c.funding_rate < -0.0003
+              and abs(c.price_change_pct) < 8):
+            c._smart_reason = f"💎 多頭優勢 (頂級多={tt:.2f}, FR={c.funding_rate*100:.3f}%)"
+            result.append(c)
+    result.sort(key=lambda x: x.score_top_trader, reverse=True)
+    return result[:10]
