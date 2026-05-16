@@ -150,13 +150,13 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
         for m in data[:30]:
             _db.save_ml_scan(
                 symbol=m.symbol, market="crypto",
-                total_score=m.total_score, early_score=m.early_score,
-                confidence=m.confidence, price=m.price,
+                total_score=m.total_score, early_score=m.score_early,
+                confidence=m.confidence, price=m.last_price,
                 change_pct=m.price_change_pct,
                 feat1=m.funding_rate * 100,
                 feat2=m.long_short_ratio,
                 feat3=m.top_trader_ls_ratio,
-                feat4=m.oi_change_pct,
+                feat4=m.open_interest_usd / 1e6,  # OI in millions
             )
     except Exception as _e:
         log.warning(f"[ML] 加密資料存檔失敗: {_e}")
