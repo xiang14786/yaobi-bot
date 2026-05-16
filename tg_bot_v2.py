@@ -1612,10 +1612,14 @@ def _us_in_market() -> bool:
 
 async def background_tw_scan(ctx):
     """台股時段感知掃描：盤中每 10 分，盤外每 60 分"""
-    global _TW_LAST
+    global _TW_LAST, _TW_RUNNING
     interval = 600 if _tw_in_market() else 3600
     if _time.time() - _TW_LAST < interval:
         return
+    if _TW_RUNNING:
+        log.info("[背景] 台股掃描進行中，跳過本次")
+        return
+    _TW_RUNNING = True
     try:
         await get_tw_scan(force=True)
         _TW_LAST = _time.time()
@@ -1623,13 +1627,19 @@ async def background_tw_scan(ctx):
         log.info(f"[背景] 台股快取已刷新（{_tw_label}）")
     except Exception as e:
         log.error(f"[背景] 台股掃描失敗: {e}")
+    finally:
+        _TW_RUNNING = False
 
 async def background_us_scan(ctx):
     """美股時段感知掃描：盤中每 10 分，盤外每 60 分"""
-    global _US_LAST
+    global _US_LAST, _US_RUNNING
     interval = 600 if _us_in_market() else 3600
     if _time.time() - _US_LAST < interval:
         return
+    if _US_RUNNING:
+        log.info("[背景] 美股掃描進行中，跳過本次")
+        return
+    _US_RUNNING = True
     try:
         stocks = await get_us_scan(force=True)
         _US_LAST = _time.time()
@@ -1640,14 +1650,23 @@ async def background_us_scan(ctx):
             refresh_inst_cache(tickers)
     except Exception as e:
         log.error(f"[背景] 美股掃描失敗: {e}")
+    finally:
+        _US_RUNNING = False
 
 async def background_crypto_scan(ctx):
-    """背景加密貨幣預掃描，每 10 分鐘刷新快取"""
+    """背景加密貨幣預掃描，每 3 分鐘刷新快取"""
+    global _CRYPTO_RUNNING
+    if _CRYPTO_RUNNING:
+        log.info("[背景] 加密掃描進行中，跳過本次")
+        return
+    _CRYPTO_RUNNING = True
     try:
         await get_scan(force=True)
         log.info("[背景] 加密快取已刷新")
     except Exception as e:
         log.error(f"[背景] 加密掃描失敗: {e}")
+    finally:
+        _CRYPTO_RUNNING = False
 
 # ============================================================
 # Phase 3 — 4H 加密信號（Binance 免費 API）
