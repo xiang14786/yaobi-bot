@@ -3030,18 +3030,28 @@ async def post_shutdown(app):
 # ============================================================
 
 async def error_handler(update, ctx):
-    """全域錯誤處理：記錄錯誤並通知用戶"""
-    log.exception(f"[ERROR] update={update}, error={ctx.error}")
-    try:
-        msg = update.effective_message if update else None
-        if msg:
-            await msg.reply_text("❌ 執行時發生錯誤，請稍後再試。")
-    except Exception:
-        pass
+    """全域錯誤處理：過濾已知無害錯誤，嚴重錯誤才通知 admin"""
+    err = ctx.error
+    err_str = str(err)
+
+    # 已知無害錯誤 → 只記 log，不打擾用戶和 admin
+    ignored = [
+        "Message is not modified",
+        "Query is too old",
+        "query id is invalid",
+        "Timed out",
+        "TimedOut",
+    ]
+    if any(x in err_str for x in ignored):
+        log.warning(f"[已知錯誤，略過] {type(err).__name__}: {err_str[:80]}")
+        return
+
+    # 嚴重錯誤 → 記錄 + 通知 admin
+    log.exception(f"[ERROR] {type(err).__name__}: {err_str}")
     try:
         await ctx.bot.send_message(
             ADMIN_ID,
-            f"⚠️ Bot Error\n`{type(ctx.error).__name__}: {ctx.error}`",
+            f"⚠️ Bot Error\n`{type(err).__name__}: {err_str[:200]}`",
             parse_mode="Markdown"
         )
     except Exception:
