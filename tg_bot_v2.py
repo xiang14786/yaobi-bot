@@ -1028,6 +1028,7 @@ async def cmd_tv_status(update, ctx):
 # 指令
 # ============================================================
 async def cmd_start(update, ctx):
+    if not update.effective_message: return
     msg = (
         "👹 *妖幣雷達 V2.3*  _加密 × 台股 × 美股 × TradingView_\n\n"
         "🎯 核心改造: 抓「即將妖動」而非「已經妖動」\n\n"
@@ -1143,7 +1144,8 @@ def _help_menu_keyboard():
     ])
 
 async def cmd_help(update, ctx):
-    await update.message.reply_text(
+    if not update.effective_message: return
+    await update.effective_message.reply_text(
         "*🤖 妖幣雷達 V2.3*\n選擇想查看的分類：\n\n💡 指令底線可省略，例如 `/twscan` = `/tw\_scan`",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_help_menu_keyboard()
@@ -3026,6 +3028,25 @@ async def post_shutdown(app):
 # ============================================================
 # 啟動
 # ============================================================
+
+async def error_handler(update, ctx):
+    """全域錯誤處理：記錄錯誤並通知用戶"""
+    log.exception(f"[ERROR] update={update}, error={ctx.error}")
+    try:
+        msg = update.effective_message if update else None
+        if msg:
+            await msg.reply_text("❌ 執行時發生錯誤，請稍後再試。")
+    except Exception:
+        pass
+    try:
+        await ctx.bot.send_message(
+            ADMIN_ID,
+            f"⚠️ Bot Error\n`{type(ctx.error).__name__}: {ctx.error}`",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
 def main():
     if BOT_TOKEN.startswith("請填入"):
         raise SystemExit("請先設定 BOT_TOKEN 環境變數")
@@ -3148,6 +3169,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_close_pick,    pattern=r"^close_pick:"))
     app.add_handler(CallbackQueryHandler(cb_atr_select,    pattern=r"^atr:"))
     app.add_handler(CallbackQueryHandler(cb_market_select, pattern=r"^mktsel:"))
+    app.add_error_handler(error_handler)
 
     # 加密版排程
     app.job_queue.run_repeating(push_pre_warning, interval=1800, first=120)
