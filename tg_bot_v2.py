@@ -486,7 +486,7 @@ def _us_wait_msg(action: str = "🔍 掃描美股") -> str:
     return f"{action}中... ⏳ 首次掃描約 90~150 秒，請稍候"
 
 def _crypto_wait_msg(action: str = "🔍 掃描加密貨幣") -> str:
-    warm = bool(CRYPTO_CACHE.get("data"))
+    warm = bool(LAST_SCAN.get("data"))
     if warm:
         return f"{action}中... ⚡ 快取命中，約 1~3 秒"
     return f"{action}中... ⏳ 首次掃描約 30~60 秒，請稍候"
