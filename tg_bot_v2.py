@@ -357,7 +357,7 @@ async def get_us_scan(force=False) -> list[UsStockMetrics]:
     now = asyncio.get_event_loop().time()
     if not force and now - US_CACHE["time"] < US_CACHE_TTL and US_CACHE["data"]:
         return US_CACHE["data"]
-    data = await fetch_all_us_metrics(top_n=100)
+    data = await fetch_all_us_metrics(top_n=80)
     US_CACHE.update({"time": now, "data": data})
     return data
 
@@ -625,7 +625,7 @@ async def push_us_premarket(ctx):
         return
     log.info(f"[US] 推送美股盤前預警給 {len(US_SUBSCRIBERS)} 人")
     try:
-        stocks = await fetch_all_us_metrics(top_n=100)
+        stocks = await fetch_all_us_metrics(top_n=80)
     except Exception as e:
         log.exception(e); return
     filtered = apply_us_filters(stocks)[:5]
