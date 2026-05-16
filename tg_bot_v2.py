@@ -21,6 +21,7 @@ V2.2 新增 (台股版):
           /tw_trade /tw_detail /tw_status /tw_sub /tw_unsub
 """
 import asyncio
+import gc
 import logging
 import os
 import re
@@ -143,6 +144,7 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
         return LAST_SCAN["data"]
     data = await fetch_all_metrics_v2(top_n=100)
     LAST_SCAN.update({"time": now, "data": data})
+    gc.collect()
     return data
 
 def get_user_filter(uid):
@@ -359,6 +361,7 @@ async def get_us_scan(force=False) -> list[UsStockMetrics]:
         return US_CACHE["data"]
     data = await fetch_all_us_metrics(top_n=80)
     US_CACHE.update({"time": now, "data": data})
+    gc.collect()
     return data
 
 def fmt_us_card(m: UsStockMetrics, rank=None, show_triggers=True) -> str:
@@ -651,6 +654,7 @@ async def get_tw_scan(force=False) -> list[TwStockMetrics]:
         return TW_CACHE["data"]
     data = await fetch_all_tw_metrics(top_n=100)
     TW_CACHE.update({"time": now, "data": data})
+    gc.collect()
     return data
 
 def fmt_tw_card(m: TwStockMetrics, rank=None, show_triggers=True) -> str:
