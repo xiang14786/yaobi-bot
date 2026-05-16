@@ -606,7 +606,8 @@ def find_tw_pre_pump(metrics: list[TwStockMetrics]) -> list[TwStockMetrics]:
             if m.change_pct < 5
             and (m.score_bb > 50 or m.score_sleep > 50)
             and (m.foreign_net > 0 or m.short_change_pct < -3)
-            and m.total_score >= 45]
+            and m.total_score >= 45
+            and "空" not in m.direction]  # 排除空方主導股票
 
 def find_tw_squeeze(metrics: list[TwStockMetrics]) -> list[TwStockMetrics]:
     """布林帶壓縮蓄勢"""

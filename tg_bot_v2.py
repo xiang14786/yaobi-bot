@@ -2858,9 +2858,11 @@ async def cmd_stock(update, ctx):
                 f"融資變化: `{m.margin_change_pct:+.1f}%`  "
                 f"融券變化: `{m.short_change_pct:+.1f}%`\n\n"
                 f"*技術*\n"
-                f"支撐: `{m.support:.2f}`  阻力: `{m.resistance:.2f}`\n"
                 f"總分: `{m.total_score:.0f}`  信心: `{m.confidence:.0%}`\n"
             )
+            _sup = f"{m.support:.2f}" if m.support else "—"
+            _res = f"{m.resistance:.2f}" if m.resistance else "—"
+            msg += f"支撐: `{_sup}`  阻力: `{_res}`\n"
             if m.triggers:
                 msg += "\n*訊號*\n" + "\n".join(f"• {t}" for t in m.triggers[:5])
             msg += f"\n\n💡 `/tw_trade {target}` 查看完整交易建議"

@@ -540,7 +540,7 @@ def score_accum_distribution(d: "UsStockData") -> tuple[float, list[str]]:
     triggers = []
     n = min(20, len(d.closes))
     up_vol = sum(d.volumes[i] for i in range(-n+1, 0) if d.closes[i] > d.closes[i-1])
-    dn_vol = sum(d.volumes[i] for i in range(-n, 0) if d.closes[i] <= d.closes[i-1])
+    dn_vol = sum(d.volumes[i] for i in range(-n+1, 0) if d.closes[i] <= d.closes[i-1])
     if dn_vol == 0:
         ad_ratio = 3.0
     else:
