@@ -92,8 +92,8 @@ def _fetch_one_sync(ticker: str, period: str = "1y") -> UsStockData:
             result.error_msg = "無歷史資料"
             return result
 
-        # 取最近 60 根日 K（已是調整後）
-        hist = hist.tail(60)
+        # 取最近 252 根日 K（1 年，與 bulk fetch 一致；RS Rating 需要完整 252 天）
+        hist = hist.tail(252)
         result.closes  = [float(v) for v in hist["Close"].tolist()]
         result.highs   = [float(v) for v in hist["High"].tolist()]
         result.lows    = [float(v) for v in hist["Low"].tolist()]

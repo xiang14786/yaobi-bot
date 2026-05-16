@@ -1128,7 +1128,7 @@ async def cb_help_section(update, ctx):
     key = query.data.split(":")[1]
     # 訂閱類別 → 直接顯示訂閱面板
     if key == "sub":
-        cid = query.from_user.id
+        cid = query.message.chat_id  # 群組訂閱送群組，私聊訂閱送私聊
         await query.edit_message_text(
             _sub_text(cid), parse_mode=ParseMode.MARKDOWN,
             reply_markup=_sub_keyboard_with_back(cid)
@@ -1335,7 +1335,7 @@ async def cmd_status(update, ctx):
     if scan_time == 0:
         last_scan_str = "尚未掃描"
     else:
-        elapsed = int(time.time() - scan_time)
+        elapsed = int(asyncio.get_event_loop().time() - scan_time)
         if elapsed < 60:
             last_scan_str = f"{elapsed} 秒前"
         elif elapsed < 3600:
@@ -1348,7 +1348,7 @@ async def cmd_status(update, ctx):
     tv_subs   = tv_handler.subscriber_count() if tv_handler else 0
     tv_count  = len(tv_handler._signal_log)   if tv_handler else 0
     msg = (
-        f"🤖 *Bot 運作狀態 V2.1*\n\n"
+        f"🤖 *Bot 運作狀態 V2.3*\n\n"
         f"✅ 運作中\n"
         f"🕐 上次掃描: `{last_scan_str}`\n"
         f"📊 掃描標的數: `{len(coins)}`\n\n"
@@ -1431,7 +1431,7 @@ def _sub_keyboard(cid: int, show_back: bool = False) -> InlineKeyboardMarkup:
         ],
         [
             _btn("台股早盤 (08:50)", "tw", TW_SUBSCRIBERS),
-            _btn("美股盤前 (20:30)", "us", US_SUBSCRIBERS),
+            _btn("美股盤前 (21:00)", "us", US_SUBSCRIBERS),
         ],
         [InlineKeyboardButton("🔕 取消全部", callback_data="sub:unsub_all")],
     ]
@@ -1448,7 +1448,7 @@ def _sub_text(cid: int) -> str:
         ("加密預警",  "每 30 分鐘推送預備暴漲/暴跌榜", cid in PRE_PUMP_SUBSCRIBERS),
         ("榜單推送",  "每小時推送加密 Top 5",          cid in SUBSCRIBERS),
         ("台股早盤",  "每日 08:50 推送台股開盤前預警",  cid in TW_SUBSCRIBERS),
-        ("美股盤前",  "每日 20:30 推送美股盤前機會",    cid in US_SUBSCRIBERS),
+        ("美股盤前",  "每日 21:00 推送美股盤前機會",    cid in US_SUBSCRIBERS),
     ]
     for name, desc, active in items:
         icon = "✅" if active else "☐"

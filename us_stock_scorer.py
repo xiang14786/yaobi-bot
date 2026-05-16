@@ -400,11 +400,11 @@ def score_us_stock(d: UsStockData) -> UsStockMetrics:
     for t in [t1, t2, t3, t4, t5, t6, t7, t8, t9]:
         all_triggers.extend(t)
 
-    m.total_score = (
+    m.total_score = min(100.0, (
         m.bb_score + m.vol_score + m.momentum_score + m.atr_score +
         m.short_squeeze_score + m.institution_score + m.ob_fvg_score +
         m.rs_score + m.accum_score
-    )
+    ))
     m.early_score = m.bb_score + m.vol_score + m.atr_score
     m.confidence  = min(m.total_score / 100, 1.0)
 
@@ -539,7 +539,7 @@ def score_accum_distribution(d: "UsStockData") -> tuple[float, list[str]]:
         return 0.0, []
     triggers = []
     n = min(20, len(d.closes))
-    up_vol = sum(d.volumes[i] for i in range(-n, 0) if d.closes[i] > d.closes[i-1])
+    up_vol = sum(d.volumes[i] for i in range(-n+1, 0) if d.closes[i] > d.closes[i-1])
     dn_vol = sum(d.volumes[i] for i in range(-n, 0) if d.closes[i] <= d.closes[i-1])
     if dn_vol == 0:
         ad_ratio = 3.0

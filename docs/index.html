@@ -251,6 +251,7 @@ footer{text-align:center;color:#8b949e;font-size:.8rem;padding:32px;border-top:1
         <li><div><div class="cmd-name">/tw_detail 2330</div><div class="cmd-alias">/twdetail 2330</div></div><div class="cmd-desc">🔍 個股詳細指標</div></li>
         <li><div><div class="cmd-name">/tw_status</div><div class="cmd-alias">/twstatus</div></div><div class="cmd-desc">🤖 台股 Bot 狀態</div></li>
         <li><div><div class="cmd-name">/tw_sub</div><div class="cmd-alias">/twsub</div></div><div class="cmd-desc">🔔 訂閱台股早盤預警（每日 08:50）</div></li>
+        <li><div><div class="cmd-name">/tw_unsub</div><div class="cmd-alias">/twunsub</div></div><div class="cmd-desc">🔕 取消訂閱台股推播</div></li>
       </ul>
     </div></div>
   </div>
@@ -343,7 +344,9 @@ footer{text-align:center;color:#8b949e;font-size:.8rem;padding:32px;border-top:1
         <li><div><div class="cmd-name">/us_top10</div><div class="cmd-alias">/ustop10</div></div><div class="cmd-desc">🔟 美股綜合 Top 10</div></li>
         <li><div><div class="cmd-name">/us_trade AAPL</div><div class="cmd-alias">/ustrade AAPL</div></div><div class="cmd-desc">💡 個股完整交易建議</div></li>
         <li><div><div class="cmd-name">/us_detail AAPL</div><div class="cmd-alias">/usdetail AAPL</div></div><div class="cmd-desc">🔍 個股詳細指標</div></li>
-        <li><div><div class="cmd-name">/us_sub</div><div class="cmd-alias">/ussub</div></div><div class="cmd-desc">🔔 訂閱美股盤前預警（每日 20:30 台灣時間）</div></li>
+        <li><div><div class="cmd-name">/us_sub</div><div class="cmd-alias">/ussub</div></div><div class="cmd-desc">🔔 訂閱美股盤前預警（每日 21:00 台灣時間）</div></li>
+        <li><div><div class="cmd-name">/us_status</div><div class="cmd-alias">/usstatus</div></div><div class="cmd-desc">📊 顯示美股掃描快取狀態與最後更新時間</div></li>
+        <li><div><div class="cmd-name">/us_unsub</div><div class="cmd-alias">/ususub</div></div><div class="cmd-desc">🔕 取消訂閱美股盤前預警</div></li>
       </ul>
     </div></div>
   </div>
@@ -357,14 +360,14 @@ footer{text-align:center;color:#8b949e;font-size:.8rem;padding:32px;border-top:1
         <tr><th>指標</th><th>最高分</th><th>說明</th></tr>
         <tr><td>📊 RS Rating</td><td>15 分</td><td>IBD 風格 1 年相對強度，百分位 0-99</td></tr>
         <tr><td>🏛️ A/D Ratio</td><td>15 分</td><td>上漲日成交量 / 下跌日成交量，法人累積指標</td></tr>
-        <tr><td>🎯 布林帶 BB</td><td>15 分</td><td>壓縮蓄勢偵測</td></tr>
+        <tr><td>🎯 布林帶 BB</td><td>20 分</td><td>壓縮蓄勢偵測</td></tr>
         <tr><td>🚀 動能</td><td>20 分</td><td>RSI + MA20/MA60 多頭排列 + 52 週高點距離（IBD 強勢股邏輯）</td></tr>
         <tr><td>⚡ 軋空潛力</td><td>15 分</td><td>高空頭比 + 技術轉強</td></tr>
         <tr><td>🏦 法人持股</td><td>10 分</td><td>機構持股比例（背景異步載入）</td></tr>
         <tr><td>📐 OB+FVG</td><td>10 分</td><td>訂單塊 + 價值缺口結構</td></tr>
-        <tr><td>🎚️ ATR 擴張</td><td>5 分</td><td>波動率擴張</td></tr>
+        <tr><td>🎚️ ATR 擴張</td><td>10 分</td><td>波動率擴張</td></tr>
       </table>
-      <div class="tip">💡 <span><b>RS Rating</b>（相對強度評分）是 IBD 投資法的核心指標，0-99 分，代表過去 1 年這支股票相對所有股票的強弱百分位。RS 85 以上表示打敗了 85% 的股票，是強勢股的關鍵門檻。</span></div>
+      <div class="tip">💡 <span><b>RS Rating</b>（相對強度評分）是 IBD 投資法的核心指標，0-99 分，代表過去 1 年這支股票相對所有股票的強弱百分位。RS 80 以上表示打敗了 80% 的股票，是強勢股的關鍵門檻。</span></div>
       <div class="tip" style="margin-top:8px">🏆 <span><b>52 週高點邏輯</b>：IBD 策略買近新高不買低點。距 52 週高點 5% 內 +4 分，15% 內 +2 分；超過 40% 以下則扣分，代表趨勢尚未恢復。</span></div>
     </div></div>
   </div>
@@ -378,15 +381,15 @@ footer{text-align:center;color:#8b949e;font-size:.8rem;padding:32px;border-top:1
         <div class="ind-card">
           <div class="ind-name">📊 RS Rating</div>
           <div class="ind-full">Relative Strength Rating (IBD 風格)</div>
-          <div class="ind-desc">計算過去 1 年股票報酬率相對所有掃描股的百分位排名。RS 85 = 打敗 85% 的股票。</div>
-          <div class="bull">▲ RS ≥ 85 = 強勢領導股</div>
+          <div class="ind-desc">計算過去 1 年股票報酬率相對所有掃描股的百分位排名。RS 80 = 打敗 80% 的股票。</div>
+          <div class="bull">▲ RS ≥ 80 = 強勢領導股</div>
           <div class="bear">▼ RS &lt; 50 = 表現落後</div>
         </div>
         <div class="ind-card">
           <div class="ind-name">🏛️ A/D Ratio</div>
           <div class="ind-full">Accumulation/Distribution Ratio</div>
           <div class="ind-desc">上漲日的成交量總和 / 下跌日的成交量總和。比值大於 1.2 代表法人在悄悄買入（累積）。</div>
-          <div class="bull">▲ A/D &gt; 1.2 = 法人在買</div>
+          <div class="bull">▲ A/D ≥ 1.5 = 強力買入 / A/D ≥ 1.2 = 法人在買</div>
           <div class="bear">▼ A/D &lt; 0.8 = 法人在賣</div>
         </div>
         <div class="ind-card">
@@ -490,7 +493,7 @@ footer{text-align:center;color:#8b949e;font-size:.8rem;padding:32px;border-top:1
         <li><div class="cmd-name">/sub</div><div class="cmd-desc">🎛️ 打開訂閱管理面板（推薦！）</div></li>
         <li><div><div class="cmd-name">/sub_pre</div><div class="cmd-alias">/subpre</div></div><div class="cmd-desc">加密預警，每 30 分鐘推送預備暴漲/暴跌榜</div></li>
         <li><div><div class="cmd-name">/tw_sub</div><div class="cmd-alias">/twsub</div></div><div class="cmd-desc">台股早盤預警，每日 08:50</div></li>
-        <li><div><div class="cmd-name">/us_sub</div><div class="cmd-alias">/ussub</div></div><div class="cmd-desc">美股盤前預警，每日 20:30（台灣時間）</div></li>
+        <li><div><div class="cmd-name">/us_sub</div><div class="cmd-alias">/ussub</div></div><div class="cmd-desc">美股盤前預警，每日 21:00（台灣時間）</div></li>
         <li><div><div class="cmd-name">/unsub_all</div><div class="cmd-alias">/unsuball</div></div><div class="cmd-desc">取消全部訂閱</div></li>
       </ul>
     </div></div>

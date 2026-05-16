@@ -581,7 +581,9 @@ def find_smart_money(coins: list) -> list:
         )[:3]
         for c in candidates:
             tt = c.top_trader_ls_ratio
-            c._smart_reason = f"📊 參考（頂級多空={tt:.2f}, 無極端信號）"
-        return candidates
+            pos = c.top_trader_pos_ratio
+            c._smart_reason = f"📊 參考 (頂級多空={tt:.2f}, 倉位={pos:.2f})"
+            result.append(c)
 
-    return result[:10]
+    return result
+         
