@@ -145,6 +145,21 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
     data = await fetch_all_metrics_v2(top_n=100)
     LAST_SCAN.update({"time": now, "data": data})
     gc.collect()
+    # ML 資料收集：儲存前 30 高分幣
+    try:
+        for m in data[:30]:
+            _db.save_ml_scan(
+                symbol=m.symbol, market="crypto",
+                total_score=m.total_score, early_score=m.early_score,
+                confidence=m.confidence, price=m.price,
+                change_pct=m.price_change_pct,
+                feat1=m.funding_rate * 100,
+                feat2=m.long_short_ratio,
+                feat3=m.top_trader_ls_ratio,
+                feat4=m.oi_change_pct,
+            )
+    except Exception as _e:
+        log.warning(f"[ML] 加密資料存檔失敗: {_e}")
     return data
 
 def get_user_filter(uid):
@@ -362,6 +377,21 @@ async def get_us_scan(force=False) -> list[UsStockMetrics]:
     data = await fetch_all_us_metrics(top_n=80)
     US_CACHE.update({"time": now, "data": data})
     gc.collect()
+    # ML 資料收集：儲存前 30 高分美股
+    try:
+        for m in sorted(data, key=lambda x: x.total_score, reverse=True)[:30]:
+            _db.save_ml_scan(
+                symbol=m.ticker, market="us",
+                total_score=m.total_score, early_score=m.early_score,
+                confidence=m.confidence, price=m.close,
+                change_pct=getattr(m, "change_pct", 0),
+                feat1=m.rs_rating,
+                feat2=m.accum_score,
+                feat3=m.momentum_score,
+                feat4=get_inst_pct(m.ticker),
+            )
+    except Exception as _e:
+        log.warning(f"[ML] 美股資料存檔失敗: {_e}")
     return data
 
 def fmt_us_card(m: UsStockMetrics, rank=None, show_triggers=True) -> str:
@@ -655,6 +685,21 @@ async def get_tw_scan(force=False) -> list[TwStockMetrics]:
     data = await fetch_all_tw_metrics(top_n=100)
     TW_CACHE.update({"time": now, "data": data})
     gc.collect()
+    # ML 資料收集：儲存前 30 高分台股
+    try:
+        for m in sorted(data, key=lambda x: x.total_score, reverse=True)[:30]:
+            _db.save_ml_scan(
+                symbol=m.stock_id, market="tw",
+                total_score=m.total_score, early_score=m.early_score,
+                confidence=m.confidence, price=m.close,
+                change_pct=m.change_pct,
+                feat1=m.foreign_net / 1e8,
+                feat2=float(m.foreign_streak),
+                feat3=m.score_bb,
+                feat4=m.margin_change_pct,
+            )
+    except Exception as _e:
+        log.warning(f"[ML] 台股資料存檔失敗: {_e}")
     return data
 
 def fmt_tw_card(m: TwStockMetrics, rank=None, show_triggers=True) -> str:
@@ -3063,6 +3108,61 @@ async def error_handler(update, ctx):
     except Exception:
         pass
 
+
+async def background_ml_labeler(ctx):
+    """每日自動標籤：5天前的掃描資料補上實際漲跌幅"""
+    import aiohttp as _aio
+    records = _db.get_unlabeled_ml_data(days_ago=5)
+    if not records:
+        return
+    labeled = 0
+    async with _aio.ClientSession() as session:
+        for r in records:
+            try:
+                sym, mkt, old_price = r["symbol"], r["market"], r["price"]
+                if old_price <= 0:
+                    continue
+                cur_price = None
+                if mkt == "crypto":
+                    url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={sym}"
+                    async with session.get(url, timeout=_aio.ClientTimeout(total=5)) as resp:
+                        if resp.status == 200:
+                            cur_price = float((await resp.json())["price"])
+                elif mkt == "tw":
+                    # 從 TW 快取取現價
+                    tw_data = TW_CACHE.get("data", [])
+                    match = next((m for m in tw_data if m.stock_id == sym), None)
+                    if match: cur_price = match.close
+                elif mkt == "us":
+                    us_data = US_CACHE.get("data", [])
+                    match = next((m for m in us_data if m.ticker == sym), None)
+                    if match: cur_price = match.close
+                if cur_price and cur_price > 0:
+                    outcome = (cur_price - old_price) / old_price * 100
+                    _db.label_ml_data(r["id"], outcome)
+                    labeled += 1
+            except Exception:
+                pass
+    if labeled:
+        log.info(f"[ML] 已標籤 {labeled} 筆訓練資料")
+
+async def cmd_ml_status(update, ctx):
+    """顯示 ML 訓練資料收集進度"""
+    stats = _db.get_ml_stats()
+    total   = stats["total"]
+    labeled = stats["labeled"]
+    by_mkt  = stats["by_market"]
+    pct = labeled / total * 100 if total else 0
+    msg = (
+        f"🤖 *ML 訓練資料收集進度*\n\n"
+        f"總筆數：`{total}`  已標籤：`{labeled}` ({pct:.0f}%)\n"
+        f"加密：`{by_mkt.get('crypto', 0)}`  "
+        f"台股：`{by_mkt.get('tw', 0)}`  "
+        f"美股：`{by_mkt.get('us', 0)}`\n\n"
+        f"_目標：累積 1000 筆標籤資料後可開始訓練模型_"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
 def main():
     if BOT_TOKEN.startswith("請填入"):
         raise SystemExit("請先設定 BOT_TOKEN 環境變數")
@@ -3172,6 +3272,7 @@ def main():
         ("unsuball",       cmd_unsub_all),
         ("mywatchlist",    cmd_mywatchlist),
         ("tpsl",           cmd_tpsl),
+        ("ml_status",      cmd_ml_status),
     ]
     for name, fn in cmds:
         app.add_handler(CommandHandler(name, fn))
@@ -3202,6 +3303,7 @@ def main():
     app.job_queue.run_repeating(background_watchlist_monitor, interval=1800, first=300)
     # Phase 2: 倉位監控（每 30 分鐘）
     app.job_queue.run_repeating(background_position_monitor,  interval=1800, first=360)
+    app.job_queue.run_repeating(background_ml_labeler,        interval=86400, first=3600)  # 每天標籤一次
 
     log.info("🤖 妖幣 Bot V2.3 啟動（加密 + TradingView + 台股 + 美股）")
     app.run_polling()
