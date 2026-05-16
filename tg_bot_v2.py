@@ -470,8 +470,29 @@ def generate_us_trade_advice(m: UsStockMetrics) -> str:
     )
 
 # ── 美股指令 ──────────────────────────────────────────────
+# ──────────────────────────────────────────────
+#  等待訊息 helper（快取是否已暖）
+# ──────────────────────────────────────────────
+def _tw_wait_msg(action: str = "🔍 掃描台股") -> str:
+    warm = bool(TW_CACHE.get("data"))
+    if warm:
+        return f"{action}中... ⚡ 快取命中，約 1~3 秒"
+    return f"{action}中... ⏳ 首次掃描約 20~30 秒，請稍候"
+
+def _us_wait_msg(action: str = "🔍 掃描美股") -> str:
+    warm = bool(US_CACHE.get("data"))
+    if warm:
+        return f"{action}中... ⚡ 快取命中，約 1~3 秒"
+    return f"{action}中... ⏳ 首次掃描約 90~150 秒，請稍候"
+
+def _crypto_wait_msg(action: str = "🔍 掃描加密貨幣") -> str:
+    warm = bool(CRYPTO_CACHE.get("data"))
+    if warm:
+        return f"{action}中... ⚡ 快取命中，約 1~3 秒"
+    return f"{action}中... ⏳ 首次掃描約 30~60 秒，請稍候"
+
 async def cmd_us_scan(update, ctx):
-    await update.message.reply_text("🔍 掃描美股中（約 30 秒）...")
+    await update.message.reply_text(_us_wait_msg())
     stocks  = await get_us_scan()
     f = US_USER_FILTERS.get(update.effective_user.id, DEFAULT_US_FILTERS)
     filtered = apply_us_filters(stocks, f)
@@ -480,7 +501,7 @@ async def cmd_us_scan(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_us_squeeze(update, ctx):
-    await update.message.reply_text("🎯 偵測美股 BB 壓縮中...")
+    await update.message.reply_text(_us_wait_msg("🎯 偵測美股 BB 壓縮"))
     stocks = await get_us_scan()
     sq = find_us_squeeze(stocks)
     text = fmt_us_list(sq, "🎯 美股 BB 壓縮蓄勢榜")
@@ -488,7 +509,7 @@ async def cmd_us_squeeze(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_us_short(update, ctx):
-    await update.message.reply_text("🎯 偵測軋空候選中...")
+    await update.message.reply_text(_us_wait_msg("🎯 偵測軋空候選"))
     stocks = await get_us_scan()
     sq = find_us_short_squeeze(stocks)
     text = fmt_us_list(sq, "🎯 美股軋空候選榜（高空頭比+技術轉強）")
@@ -496,6 +517,7 @@ async def cmd_us_short(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_us_momentum(update, ctx):
+    await update.message.reply_text(_us_wait_msg())
     stocks = await get_us_scan()
     mo = find_us_momentum(stocks)
     text = fmt_us_list(mo, "📈 美股動能榜（RSI+均線排列）")
@@ -503,6 +525,7 @@ async def cmd_us_momentum(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_us_top10(update, ctx):
+    await update.message.reply_text(_us_wait_msg())
     stocks = await get_us_scan()
     text = fmt_us_list(stocks[:10], "🏆 美股綜合 Top 10", show_triggers=False)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
@@ -732,7 +755,7 @@ def generate_tw_trade_advice(m: TwStockMetrics) -> str:
 
 # ── 台股指令 ──────────────────────────────────────────────
 async def cmd_tw_scan(update, ctx):
-    await update.message.reply_text("🔍 掃描台股中...")
+    await update.message.reply_text(_tw_wait_msg())
     stocks   = await get_tw_scan()
     filtered = find_tw_pre_pump(stocks)
     text = fmt_tw_list(filtered, f"🔋 台股預備暴漲榜 ({len(filtered)} 命中)")
@@ -740,7 +763,7 @@ async def cmd_tw_scan(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_tw_squeeze(update, ctx):
-    await update.message.reply_text("🎯 偵測 BB 壓縮中...")
+    await update.message.reply_text(_tw_wait_msg("🎯 偵測台股 BB 壓縮"))
     stocks = await get_tw_scan()
     sq     = find_tw_squeeze(stocks)
     text   = fmt_tw_list(sq, "🎯 台股 BB 壓縮蓄勢榜")
@@ -748,6 +771,7 @@ async def cmd_tw_squeeze(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_tw_foreign(update, ctx):
+    await update.message.reply_text(_tw_wait_msg())
     stocks  = await get_tw_scan()
     foreign = find_tw_institutional_buy(stocks)
     text    = fmt_tw_list(foreign, "🏦 外資連續買超榜（≥3天）")
@@ -755,6 +779,7 @@ async def cmd_tw_foreign(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_tw_top10(update, ctx):
+    await update.message.reply_text(_tw_wait_msg())
     stocks = await get_tw_scan()
     text   = fmt_tw_list(stocks[:10], "🏆 台股綜合 Top 10", show_triggers=False)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
@@ -850,6 +875,7 @@ async def cmd_tw_unsub(update, ctx):
 # ── 台股法人聯手榜 ──────────────────────────────────────
 async def cmd_tw_joint(update, ctx):
     """法人聯手榜：外資+投信同日買超"""
+    await update.message.reply_text(_tw_wait_msg("🤝 查詢法人聯手"))
     stocks = await get_tw_scan()
     joint  = find_tw_joint_buy(stocks)
     if not joint:
@@ -862,6 +888,7 @@ async def cmd_tw_joint(update, ctx):
 # ── 美股 RS Rating 榜 ──────────────────────────────────
 async def cmd_us_rs(update, ctx):
     """RS Rating 領導股榜單"""
+    await update.message.reply_text(_us_wait_msg("🏆 查詢 RS Rating 榜"))
     stocks = await get_us_scan()
     rs     = find_us_rs_leaders(stocks)
     if not rs:
@@ -879,6 +906,7 @@ async def cmd_us_rs(update, ctx):
 
 async def cmd_us_accum(update, ctx):
     """法人累積榜（A/D 比強）"""
+    await update.message.reply_text(_us_wait_msg("🏦 查詢法人累積榜"))
     stocks = await get_us_scan()
     ac     = find_us_accum(stocks)
     if not ac:
@@ -1151,7 +1179,7 @@ async def cb_help_menu(update, ctx):
     )
 
 async def cmd_pre_pump(update, ctx):
-    await update.message.reply_text("🔋 偵測蓄勢拉升中...")
+    await update.message.reply_text(_crypto_wait_msg("🔋 偵測蓄勢拉升"))
     coins = await get_scan()
     pre = find_pre_pump(coins)
     text = fmt_list(pre, "🔋 預備暴漲榜 (尚未啟動)")
@@ -1159,7 +1187,7 @@ async def cmd_pre_pump(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_pre_dump(update, ctx):
-    await update.message.reply_text("⚠️ 偵測蓄勢下殺中...")
+    await update.message.reply_text(_crypto_wait_msg("⚠️ 偵測蓄勢下殺"))
     coins = await get_scan()
     pre = find_pre_dump(coins)
     text = fmt_list(pre, "⚠️ 預備暴跌榜 (尚未啟動)")
@@ -1167,7 +1195,7 @@ async def cmd_pre_dump(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_squeeze(update, ctx):
-    await update.message.reply_text("🎯 偵測壓縮蓄勢...")
+    await update.message.reply_text(_crypto_wait_msg("🎯 偵測壓縮蓄勢"))
     coins = await get_scan()
     sq = find_squeeze(coins)
     text = fmt_list(sq, "🎯 壓縮蓄勢榜 (BB+OI)")
@@ -1175,6 +1203,7 @@ async def cmd_squeeze(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_confidence(update, ctx):
+    await update.message.reply_text(_crypto_wait_msg())
     coins = await get_scan()
     high = [c for c in coins if c.confidence >= 0.6]
     high.sort(key=lambda c: c.confidence, reverse=True)
@@ -1183,7 +1212,7 @@ async def cmd_confidence(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_scan(update, ctx):
-    await update.message.reply_text("🔍 掃描中...")
+    await update.message.reply_text(_crypto_wait_msg())
     coins = await get_scan()
     f = get_user_filter(update.effective_user.id)
     filtered = apply_filters_v2(coins, f)
@@ -1192,12 +1221,14 @@ async def cmd_scan(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_top10(update, ctx):
+    await update.message.reply_text(_crypto_wait_msg())
     coins = await get_scan()
     text = fmt_list(coins, "🏆 綜合 Top 10", show_triggers=False)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                     disable_web_page_preview=True)
 
 async def cmd_pump(update, ctx):
+    await update.message.reply_text(_crypto_wait_msg())
     coins = await get_scan()
     pumps = [c for c in coins if "🚀" in c.direction or "🔋" in c.direction]
     text = fmt_list(pumps, "🚀 看多榜 (含預警+延續)")
@@ -1205,6 +1236,7 @@ async def cmd_pump(update, ctx):
                                     disable_web_page_preview=True)
 
 async def cmd_dump(update, ctx):
+    await update.message.reply_text(_crypto_wait_msg())
     coins = await get_scan()
     dumps = [c for c in coins if "📉" in c.direction or "⚠️" in c.direction]
     text = fmt_list(dumps, "📉 看空榜 (含預警+延續)")
