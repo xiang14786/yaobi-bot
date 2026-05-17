@@ -359,14 +359,16 @@ footer{text-align:center;color:#8b949e;font-size:.8rem;padding:32px;border-top:1
     <div class="acc-body"><div class="acc-inner">
       <table class="score-table">
         <tr><th>指標</th><th>最高分</th><th>說明</th></tr>
-        <tr><td>📊 RS Rating</td><td>15 分</td><td>IBD 風格 1 年相對強度，百分位 0-99</td></tr>
-        <tr><td>🏛️ A/D Ratio</td><td>15 分</td><td>上漲日成交量 / 下跌日成交量，法人累積指標</td></tr>
-        <tr><td>🎯 布林帶 BB</td><td>20 分</td><td>壓縮蓄勢偵測</td></tr>
+        <tr><td>🎯 布林帶 BB</td><td>20 分</td><td>壓縮蓄勢偵測（早分之一）</td></tr>
         <tr><td>🚀 動能</td><td>20 分</td><td>RSI + MA20/MA60 多頭排列 + 52 週高點距離（IBD 強勢股邏輯）</td></tr>
         <tr><td>⚡ 軋空潛力</td><td>15 分</td><td>高空頭比 + 技術轉強</td></tr>
+        <tr><td>📊 RS Rating</td><td>15 分</td><td>IBD 風格 1 年相對強度，百分位 0-99</td></tr>
+        <tr><td>🏛️ A/D Ratio</td><td>15 分</td><td>上漲日成交量 / 下跌日成交量，法人累積指標</td></tr>
+        <tr><td>📈 量能</td><td>15 分</td><td>量比（今日 vs 均量）+ 量能趨勢（近 5 日 vs 20 日均量）（早分之一）</td></tr>
         <tr><td>🏦 法人持股</td><td>10 分</td><td>機構持股比例（背景異步載入）</td></tr>
         <tr><td>📐 OB+FVG</td><td>10 分</td><td>訂單塊 + 價值缺口結構</td></tr>
-        <tr><td>🎚️ ATR 擴張</td><td>10 分</td><td>波動率擴張</td></tr>
+        <tr><td>🎚️ ATR 擴張</td><td>10 分</td><td>波動率擴張（早分之一）</td></tr>
+        <tr><th colspan="3" style="color:#8b949e;font-size:.75rem;padding:6px 12px">總分上限 100 分（各項滿分加總超過 100，系統自動截斷）</th></tr>
       </table>
       <div class="tip">💡 <span><b>早分（Early Score）</b>是什麼？<br>美股的早分由 <b>BB 壓縮 + 量能放大 + ATR 擴張</b> 三項指標組成，滿分約 45 分。<br>早分高代表「股價尚未大漲，但技術面已悄悄蓄勢完成」——通常是機構在建倉、市場還沒注意到的階段。<br><b>早分 ≥ 18（約 40%）才進入榜單</b>，避免追高已啟動的股票。可用 <code>/set_us_early</code> 自訂門檻。</span></div>
       <div class="tip" style="margin-top:8px">💡 <span><b>RS Rating</b>（相對強度評分）是 IBD 投資法的核心指標，0-99 分，代表過去 1 年這支股票相對所有股票的強弱百分位。RS 80 以上表示打敗了 80% 的股票，是強勢股的關鍵門檻。</span></div>
