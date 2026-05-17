@@ -169,13 +169,49 @@ fly machine start <machine_id> -a yaobi-bot-tw
 - 本機跑完輸出 CSV → sftp 上傳 → SSH import 進 Fly.io `/data/yaobi.db`
 - 匯入結果：加密 7783 筆 + 台股 4662 筆 + 美股 5750 筆 = **18195 筆已標籤資料**
 - `import_ml_csv.py` 工具腳本（本機匯入用）
+- `reimport_crypto.py`：清除舊加密資料、重新匯入補齊 OI 欄位的 CSV
+
+### ML 訓練 v3（XGBoost + Optuna）
+- `train_ml.py` 升級為二元分類（漲>3% vs 其他），AUC 評估
+- Optuna 自動調參（80 trials，TPE sampler）
+- 特徵工程：score_x_conf、early_ratio、change_sq、feat1x2、feat2x3
+- `n_jobs=1`（避免 Windows 中文路徑 UnicodeEncodeError）
+- 最終結果：Crypto AUC 0.594、TW AUC 0.652、US AUC 0.638
+- 模型以 dict 格式儲存：`{"model": model, "features": ALL_FEATURES}`
+
+### Bot 功能升級
+- **TP/SL 互動流程**：觸及 SL 或 TP 反轉不再自動平倉，改為發送含按鈕的警報
+  - 按鈕：✅平倉 | 調整SL | 輸入新SL | 繼續持倉
+  - 每 5 分鐘重複提醒，第三次後繼續提醒（不自動平倉）
+  - `PENDING_ALERTS` dict 追蹤未回應警報
+- **台股/美股篩選開放**：`/set_tw_score`、`/set_tw_early`、`/set_us_score`、`/set_us_early`
+  - 原本只有加密貨幣可調整，現三市場均可自訂
+  - `/myfilters` 顯示三市場篩選設定
+  - `/reset` 清除三市場設定
+- **Bot 自動儲存真實特徵**：背景掃描後存入 ml_scan_data，feat1~feat4 改為真實指標值
+  - 加密：feat1=funding_rate, feat2=long_short_ratio, feat3=top_trader_ls_ratio, feat4=oi_change_pct
+  - 台股：feat1=foreign_net/1e8, feat2=foreign_streak, feat3=score_bb, feat4=margin_change_pct
+  - 美股：feat1=rs_rating, feat2=accum_score, feat3=momentum_score, feat4=inst_pct
+- **`/ml_status` 升級**：顯示最後收集時間與今日新增筆數
+
+### docs/index.html 同步
+- 加入台股「領先分」說明（BB壓縮+量能+沉睡甦醒，max ~43分）
+- 加入美股「早分」說明（BB壓縮+量能+ATR，max ~45分）
+- 補上美股評分表缺少的「量能 15分」列
+- 修正台股docstring 25%→35%（法人動向）
+- 新增篩選指令說明（台股/美股/加密三市場）
+- 推薦設定表格更新為三市場版本
+
+### ML 自動更新評分決策
+- 決定**暫不實作**模型自動回調評分權重
+- 原因：AUC ~0.65 尚不可靠，自動改權重風險高，回報低
 
 ---
 
 ## 待完成
 - `/tw_status` 加入法人聯手計數顯示（小功能）
 - 確認新用戶 `/start` 無回應的根本原因
-- 長期：用 18195 筆資料訓練隨機森林模型（準備 `train_ml.py`）
+- 長期：AUC 累積到 0.70+ 後考慮讓模型影響評分權重
 
 ## 已知問題 / 注意事項
 - PowerShell 寫 fly.toml 需注意 BOM 編碼問題（用 `New-Object System.Text.UTF8Encoding $false`）
