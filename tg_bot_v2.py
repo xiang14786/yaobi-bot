@@ -145,21 +145,23 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
     data = await fetch_all_metrics_v2(top_n=100)
     LAST_SCAN.update({"time": now, "data": data})
     gc.collect()
-    # ML 資料收集：儲存前 30 高分幣
+    # ML 真實特徵儲存（前 30 高分）
     try:
-        for m in data[:30]:
-            _db.save_ml_scan(
-                symbol=m.symbol, market="crypto",
-                total_score=m.total_score, early_score=m.score_early,
-                confidence=m.confidence, price=m.last_price,
-                change_pct=m.price_change_pct,
-                feat1=m.funding_rate * 100,
-                feat2=m.long_short_ratio,
-                feat3=m.top_trader_ls_ratio,
-                feat4=m.open_interest_usd / 1e6,  # OI in millions
+        import time as _t
+        from db import save_ml_scan
+        for c in sorted(data, key=lambda x: x.total_score, reverse=True)[:30]:
+            save_ml_scan(
+                symbol=c.symbol, market="crypto",
+                total_score=c.total_score, early_score=c.score_early,
+                confidence=c.confidence, price=c.last_price,
+                change_pct=c.price_change_pct,
+                feat1=c.funding_rate,           # 真實 funding rate
+                feat2=c.long_short_ratio,       # 真實多空比
+                feat3=c.top_trader_ls_ratio,    # 真實頂級多空比
+                feat4=getattr(c, "oi_change_pct", 0.0),  # OI 變化
             )
     except Exception as _e:
-        log.warning(f"[ML] 加密資料存檔失敗: {_e}")
+        log.debug(f"[ML] crypto 儲存失敗: {_e}")
     return data
 
 def get_user_filter(uid):
@@ -377,21 +379,22 @@ async def get_us_scan(force=False) -> list[UsStockMetrics]:
     data = await fetch_all_us_metrics(top_n=80)
     US_CACHE.update({"time": now, "data": data})
     gc.collect()
-    # ML 資料收集：儲存前 30 高分美股
+    # ML 真實特徵儲存（前 30 高分）
     try:
+        from db import save_ml_scan
         for m in sorted(data, key=lambda x: x.total_score, reverse=True)[:30]:
-            _db.save_ml_scan(
+            save_ml_scan(
                 symbol=m.ticker, market="us",
                 total_score=m.total_score, early_score=m.early_score,
                 confidence=m.confidence, price=m.close,
-                change_pct=getattr(m, "change_pct", 0),
-                feat1=m.rs_rating,
-                feat2=m.accum_score,
-                feat3=m.momentum_score,
-                feat4=get_inst_pct(m.ticker),
+                change_pct=m.change_pct,
+                feat1=m.rs_rating,      # RS Rating
+                feat2=m.accum_score,    # 法人累積分
+                feat3=m.momentum_score, # 動能分
+                feat4=m.inst_pct,       # 法人持股
             )
     except Exception as _e:
-        log.warning(f"[ML] 美股資料存檔失敗: {_e}")
+        log.debug(f"[ML] us 儲存失敗: {_e}")
     return data
 
 def fmt_us_card(m: UsStockMetrics, rank=None, show_triggers=True) -> str:
@@ -685,21 +688,22 @@ async def get_tw_scan(force=False) -> list[TwStockMetrics]:
     data = await fetch_all_tw_metrics(top_n=100)
     TW_CACHE.update({"time": now, "data": data})
     gc.collect()
-    # ML 資料收集：儲存前 30 高分台股
+    # ML 真實特徵儲存（前 30 高分）
     try:
+        from db import save_ml_scan
         for m in sorted(data, key=lambda x: x.total_score, reverse=True)[:30]:
-            _db.save_ml_scan(
+            save_ml_scan(
                 symbol=m.stock_id, market="tw",
                 total_score=m.total_score, early_score=m.early_score,
                 confidence=m.confidence, price=m.close,
                 change_pct=m.change_pct,
-                feat1=m.foreign_net / 1e8,
-                feat2=float(m.foreign_streak),
-                feat3=m.score_bb,
-                feat4=m.margin_change_pct,
+                feat1=m.foreign_net / 1e8,   # 外資淨買(億)
+                feat2=m.foreign_streak,       # 連買天數
+                feat3=m.score_bb,             # BB 壓縮分
+                feat4=m.margin_change_pct,    # 融資變化
             )
     except Exception as _e:
-        log.warning(f"[ML] 台股資料存檔失敗: {_e}")
+        log.debug(f"[ML] tw 儲存失敗: {_e}")
     return data
 
 def fmt_tw_card(m: TwStockMetrics, rank=None, show_triggers=True) -> str:
