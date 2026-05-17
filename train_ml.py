@@ -28,7 +28,7 @@ import optuna
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings("ignore")
 
-DB_PATH = Path(__file__).parent / "yaobi.db"
+DB_PATH = Path(__file__).parent / "yaobi_fly.db"
 
 FEATURES = [
     "total_score", "early_score", "confidence",

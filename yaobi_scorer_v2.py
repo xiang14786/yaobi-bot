@@ -517,6 +517,17 @@ def find_squeeze(coins: list[CoinMetricsV2]) -> list[CoinMetricsV2]:
             out.append(c)
     return out
 
+def passes_consistency_gate(m: "CoinMetricsV2") -> bool:
+    """至少 3/5 核心指標同向才視為有效訊號"""
+    checks = [
+        m.score_early > 20,                              # 領先指標有動能
+        m.funding_rate < 0,                              # 空頭付費（多頭有利）
+        m.long_short_ratio > 1.1,                        # 多空比偏多
+        m.score_onchain > 5,                              # 鏈上量能有訊號
+        m.score_structure > 60,                          # 結構分夠強
+    ]
+    return sum(checks) >= 3
+
 
 # ============================================================
 # CLI 測試

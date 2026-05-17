@@ -37,7 +37,7 @@ from yaobi_scorer_v2 import (
     fetch_all_metrics_v2, apply_filters_v2,
     find_pre_pump, find_pre_dump, find_squeeze,
     DEFAULT_FILTERS_V2, CoinMetricsV2,
-
+    passes_consistency_gate,
     find_smart_money,
 )
 
@@ -156,15 +156,37 @@ PENDING_ALERTS: dict[int, dict] = {}
 # 使用者手動輸入新止損暫存 {user_id: pos_id}
 _PENDING_SL_INPUT: dict[int, int] = {}
 
+# BTC 大盤趨勢狀態（供加密預警使用）
+_BTC_TREND: dict = {"change_24h": 0.0, "above_ma20": True, "last_update": 0}
+
 # ============================================================
 # 共用
 # ============================================================
+def _update_btc_trend(coins: list) -> None:
+    """更新 BTC 大盤趨勢狀態"""
+    global _BTC_TREND
+    for c in coins:
+        if c.symbol == "BTCUSDT":
+            _BTC_TREND["change_24h"] = c.price_change_pct
+            _BTC_TREND["above_ma20"] = c.total_score > 40
+            _BTC_TREND["last_update"] = time.time()
+            break
+
+
+def _btc_trend_warning() -> str:
+    """若 BTC 24h < -3%，回傳警告文字"""
+    if _BTC_TREND["change_24h"] < -3.0:
+        return f"⚠️ 大盤偏空（BTC {_BTC_TREND['change_24h']:.1f}%），訊號可靠性降低\n"
+    return ""
+
+
 async def get_scan(force=False) -> list[CoinMetricsV2]:
     now = asyncio.get_event_loop().time()
     if not force and now - LAST_SCAN["time"] < CACHE_TTL and LAST_SCAN["data"]:
         return LAST_SCAN["data"]
     data = await fetch_all_metrics_v2(top_n=100)
     LAST_SCAN.update({"time": now, "data": data})
+    _update_btc_trend(data)
     gc.collect()
     # ML 真實特徵儲存（前 30 高分）
     try:
@@ -1711,19 +1733,29 @@ async def push_pre_warning(ctx):
         log.exception(e); return
     pre_pump_raw = find_pre_pump(coins)
     # 過濾：跌幅 < -8% 且早分 < 12 → 無動能支撐的下跌，不推
+    # 新增：一致性門檻，至少 3/5 指標同向
     pre_pump = [
         c for c in pre_pump_raw
         if not (c.price_change_pct < -8 and c.score_early < 12)
+        and passes_consistency_gate(c)
     ][:3]
     pre_dump = find_pre_dump(coins)[:3]
     if not pre_pump and not pre_dump:
         return
     parts = [f"🔋 *預警快訊*  _{datetime.now(TW_TZ):%H:%M}_\n"]
+    btc_warn = _btc_trend_warning()
+    if btc_warn:
+        parts.append(btc_warn)
     if pre_pump:
         parts.append("*預備暴漲*")
-        for i, c in enumerate(pre_pump, 1):
-            parts.append(fmt_card(c, i, show_triggers=True))
-            parts.append("")
+        import aiohttp as _aio
+        async with _aio.ClientSession() as _mtf_sess:
+            for i, c in enumerate(pre_pump, 1):
+                parts.append(fmt_card(c, i, show_triggers=True))
+                mtf = await fetch_mtf_signal(c.base, session=_mtf_sess)
+                if mtf:
+                    parts.append(f"📊 多時框: {mtf}")
+                parts.append("")
     if pre_dump:
         parts.append("*預備暴跌*")
         for i, c in enumerate(pre_dump, 1):
@@ -1878,6 +1910,68 @@ async def fetch_4h_signal(base: str) -> str:
             return f"📉 4H 空頭排列 {pct4h:+.2f}%  ⚠️ 趨勢一致偏空"
         else:
             return f"↔️ 4H 盤整 {pct4h:+.2f}%"
+    except Exception:
+        return ""
+
+
+async def fetch_mtf_signal(base: str, session=None) -> str:
+    """
+    多時框方向信號：日線 + 4H + 1H
+    使用 close vs MA20 判斷方向 (▲多 / ▼空)
+    回傳格式如: 日線 ▲  4H ▲  1H ▼（等回調）
+    session 可傳入共用，避免每次建立新連線
+    """
+    import aiohttp as _aio
+    symbol = f"{base}USDT"
+    fapi_base = "https://fapi.binance.com/fapi/v1/klines"
+    timeout = _aio.ClientTimeout(total=10)
+
+    def _ma20_dir(klines_raw):
+        try:
+            closes = [float(k[4]) for k in klines_raw]
+            if len(closes) < 20:
+                return None
+            ma20 = sum(closes[-20:]) / 20
+            return closes[-1] > ma20
+        except Exception:
+            return None
+
+    async def _fetch_tf(s, interval):
+        try:
+            async with s.get(fapi_base,
+                             params={"symbol": symbol, "interval": interval, "limit": 50},
+                             timeout=timeout) as r:
+                return await r.json() if r.status == 200 else []
+        except Exception:
+            return []
+
+    try:
+        own_session = session is None
+        s = _aio.ClientSession() if own_session else session
+        try:
+            d_raw, h4_raw, h1_raw = await asyncio.gather(
+                _fetch_tf(s, "1d"),
+                _fetch_tf(s, "4h"),
+                _fetch_tf(s, "1h"),
+            )
+        finally:
+            if own_session:
+                await s.close()
+
+        d_bull  = _ma20_dir(d_raw)
+        h4_bull = _ma20_dir(h4_raw)
+        h1_bull = _ma20_dir(h1_raw)
+
+        def arrow(b):
+            return "?" if b is None else ("▲" if b else "▼")
+
+        suffix = ""
+        if h1_bull is False and (d_bull or h4_bull):
+            suffix = "（等回調）"
+        elif h1_bull and d_bull is False:
+            suffix = "（逆勢反彈）"
+
+        return f"日線 {arrow(d_bull)}  4H {arrow(h4_bull)}  1H {arrow(h1_bull)}{suffix}"
     except Exception:
         return ""
 
