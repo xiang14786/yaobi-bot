@@ -420,17 +420,7 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
                 + m.score_onchain   * WEIGHTS_V2["on_chain"]
             )
 
-            # === BTC 市場環境乘數 ===
-            btc_chg = _BTC_CHANGE_24H
-            if btc_chg > 2:
-                market_mult = 1.08
-            elif btc_chg < -3:
-                market_mult = 0.85
-            else:
-                market_mult = 1.0
-            m.total_score *= market_mult
-
-            # === 一致性獎勵：多指標同向加分 ===
+            # === 一致性獎勵：先算（乘數前），多指標同向加分 ===
             consistency_checks = [
                 m.score_early > 20,
                 m.funding_rate < 0,
@@ -446,8 +436,17 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
             elif n_agree == 3:
                 m.total_score += 3
             elif n_agree <= 1:
-                m.total_score -= 5
-            m.total_score = max(0, min(100, m.total_score))
+                m.total_score = max(0, m.total_score - 5)
+
+            # === BTC 市場環境乘數：最後才乘（整體縮放）===
+            btc_chg = _BTC_CHANGE_24H
+            if btc_chg > 2:
+                market_mult = 1.08
+            elif btc_chg < -3:
+                market_mult = 0.85
+            else:
+                market_mult = 1.0
+            m.total_score = max(0, min(100, m.total_score * market_mult))
 
             # 方向判斷 - 優先參考 early_bias
             if "PRE_PUMP" in m.early_bias:

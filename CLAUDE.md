@@ -208,10 +208,52 @@ fly machine start <machine_id> -a yaobi-bot-tw
 
 ---
 
+---
+
+## 2026-05-18 工作記錄
+
+### 漏洞修復（第三輪全面掃描）
+- `yaobi_scorer_v2.py`：`except: pass` → `log.warning` + 加 `import logging`
+- `yaobi_scorer_v2.py`：`_HISTORY_CACHE` 加 MAX_SIZE=200 防 OOM
+- `tw_data_fetcher.py`：T86 欄位索引加 `>= 0` 邊界檢查（兩處）
+- `tw_data_fetcher.py`：外資連買天數 `streak += sign` → `streak += 1` + 方向分離
+- `us_stock_scorer.py`：RS Rating `min(99.0, ...)` 防超界
+- `tg_bot_v2.py`：ET_TZ 改動態 DST（`_et_tz()` 函式）
+- `tg_bot_v2.py`：`_SENT_ALERTS` 改 dict + 24h TTL + `_prune_sent_alerts()` 定期清理
+- `tg_bot_v2.py`：import `apply_tw_filters`（hotfix NameError）
+- `fetch_mtf_signal`：修正 async context manager 語法錯誤，改用 `asyncio.gather`
+- `fetch_mtf_signal`：改為接受共用 session，避免每幣各開 session（OOM 修復）
+- `yaobi_scorer_v2.py`：`oi_change_pct` 不存在 → 改用 `score_onchain > 5`
+
+### 信號品質升級
+- **預警過濾**：`change_pct < -8% AND early_score < 12` 不推（避免IRYS類假訊號）
+- **BTC 大盤過濾**：BTC < -3% 在推播加警示文字
+- **一致性門檻**：`passes_consistency_gate()` 要求 ≥3/5 指標同向才推
+- **多時框顯示**：`fetch_mtf_signal()` 顯示日線/4H/1H 方向，推播附帶顯示
+
+### 評分系統升級
+- **加密早分門檻**：`min_early_score` 40 → 30（一致性門檻補充質量把關）
+- **一致性獎勵**：5指標同向 +12/+7/+3，≤1指標 −5（先算）
+- **BTC 市場乘數**：漲>2% ×1.08、跌<−3% ×0.85（後乘）
+- 計算順序：加權和 → 一致性獎勵 → BTC乘數 → min/max(0,100)
+- `get_scan()` 評分前預先抓取 BTC 24h 漲跌（修復第一次掃描乘數=0的問題）
+
+### ML 訓練資料增強
+- `db.py`：`ml_scan_data` 加兩欄：`btc_change_24h`、`consistency_score`
+- 舊 DB 自動 `ALTER TABLE` 相容（不需重建）
+- `save_ml_scan()` 新增兩參數，三市場掃描後均儲存
+- `train_ml.py`：`FEATURES` 加入 `btc_change_24h`、`consistency_score`
+- `train_ml.py`：`DB_PATH` 改為 `yaobi_fly.db`（本機訓練用）
+
+### docs/index.html 同步
+- 加密評分表下方加入「分數調整機制」說明（一致性獎勵 + BTC乘數）
+
+---
+
 ## 待完成
 - `/tw_status` 加入法人聯手計數顯示（小功能）
 - 確認新用戶 `/start` 無回應的根本原因
-- 長期：AUC 累積到 0.70+ 後考慮讓模型影響評分權重
+- 長期：5天後有新標籤資料，重新拉 DB 訓練，觀察 AUC 是否提升（目標 0.70+）
 
 ## 已知問題 / 注意事項
 - PowerShell 寫 fly.toml 需注意 BOM 編碼問題（用 `New-Object System.Text.UTF8Encoding $false`）

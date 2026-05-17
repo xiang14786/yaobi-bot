@@ -32,7 +32,8 @@ DB_PATH = Path(__file__).parent / "yaobi_fly.db"
 
 FEATURES = [
     "total_score", "early_score", "confidence",
-    "change_pct", "feat1", "feat2", "feat3", "feat4"
+    "change_pct", "feat1", "feat2", "feat3", "feat4",
+    "btc_change_24h", "consistency_score"  # 市場環境 + 指標一致性
 ]
 
 MARKET_LABELS = {

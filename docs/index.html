@@ -150,6 +150,10 @@ footer{text-align:center;color:#8b949e;font-size:.8rem;padding:32px;border-top:1
         <tr><td>🔗 鏈上代理</td><td><div class="pct-bar-wrap"><div class="pct-bar" style="width:4%"></div></div>4%</td><td>量能 × 價格動向的鏈上活動估算</td></tr>
       </table>
       <div class="tip">💡 <span><b>早分（Early Score）</b>是什麼？<br>由 BB壓縮、成交量、ATR 等「尚未啟動」的指標組成，早分高代表「還沒大漲但蓄勢完成」，是提前佈局的關鍵信號。</span></div>
+      <div class="tip" style="margin-top:8px">⚙️ <span><b>分數調整機制</b>（加權計算後依序套用）：<br>
+      1️⃣ <b>一致性獎勵</b>：5 項指標（早分&gt;20、費率&lt;0、多空比&gt;1.1、鏈上&gt;5、結構&gt;60）同向越多分數越高：5項 +12 / 4項 +7 / 3項 +3 / ≤1項 −5<br>
+      2️⃣ <b>BTC 大盤乘數</b>：BTC 24h 漲 &gt;2% → ×1.08；跌 &lt;−3% → ×0.85；其餘 ×1.00<br>
+      最終分數 = (加權和 + 一致性獎勵) × BTC乘數，上限 100 分</span></div>
     </div></div>
   </div>
 

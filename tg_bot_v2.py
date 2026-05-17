@@ -190,6 +190,20 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
     now = asyncio.get_event_loop().time()
     if not force and now - LAST_SCAN["time"] < CACHE_TTL and LAST_SCAN["data"]:
         return LAST_SCAN["data"]
+    # 評分前先更新 BTC 漲跌數據，確保乘數正確（避免第一次掃描時 _BTC_CHANGE_24H=0）
+    try:
+        import aiohttp as _aio, yaobi_scorer_v2 as _ysv
+        async with _aio.ClientSession() as _s:
+            async with _s.get(
+                "https://fapi.binance.com/fapi/v1/ticker/24hr",
+                params={"symbol": "BTCUSDT"},
+                timeout=_aio.ClientTimeout(total=5)
+            ) as _r:
+                if _r.status == 200:
+                    _btc = await _r.json()
+                    _ysv._BTC_CHANGE_24H = float(_btc.get("priceChangePercent", 0))
+    except Exception:
+        pass  # 失敗不影響掃描，沿用上次值
     data = await fetch_all_metrics_v2(top_n=100)
     LAST_SCAN.update({"time": now, "data": data})
     _update_btc_trend(data)
