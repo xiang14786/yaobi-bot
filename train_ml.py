@@ -1,14 +1,15 @@
 """
-train_ml.py v3 — XGBoost + Optuna 自動調參
+train_ml.py v4 — LightGBM + Optuna 自動調參
 =============================================
 改進點：
   1. 二元分類：漲>3% vs 其他
-  2. Optuna 自動嘗試 100 種參數組合，找最佳
+  2. Optuna 自動嘗試 80 種參數組合，找最佳
   3. 特徵工程（交叉特徵）
-  4. 每次跑都會自動找比上次更好的參數
+  4. LightGBM：速度更快、記憶體更省、葉節點生長更靈活
+  5. 新增特徵：btc_change_24h、consistency_score
 
 執行：
-    pip install xgboost optuna scikit-learn joblib pandas
+    pip install lightgbm optuna scikit-learn joblib pandas
     python train_ml.py
 
 輸出：
@@ -21,9 +22,9 @@ import warnings
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.metrics import roc_auc_score, accuracy_score, classification_report
-from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
 import optuna
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings("ignore")
@@ -33,7 +34,8 @@ DB_PATH = Path(__file__).parent / "yaobi_fly.db"
 FEATURES = [
     "total_score", "early_score", "confidence",
     "change_pct", "feat1", "feat2", "feat3", "feat4",
-    "btc_change_24h", "consistency_score"  # 市場環境 + 指標一致性
+    "btc_change_24h", "consistency_score",  # 市場環境 + 指標一致性
+    "dow", "rank_in_session"                # 時間週期性 + 同批相對排名
 ]
 
 MARKET_LABELS = {
@@ -79,6 +81,14 @@ def train_market(market: str, n_trials: int = 80):
     df = add_features(df)
     df["label"] = (df["outcome_label"] == 1).astype(int)
 
+    # 舊資料可能缺欄位，補預設值
+    for col in ["btc_change_24h", "consistency_score"]:
+        if col not in df.columns:
+            df[col] = 0
+    for col in ["dow", "rank_in_session"]:
+        if col not in df.columns:
+            df[col] = -1
+
     pos_rate = df["label"].mean()
     print(f"  資料: {len(df)} 筆  |  漲>3% 比例: {pos_rate:.1%}")
 
@@ -91,22 +101,22 @@ def train_market(market: str, n_trials: int = 80):
     # ── Optuna 自動調參 ──
     def objective(trial):
         params = {
-            "n_estimators":      trial.suggest_int("n_estimators", 100, 500),
-            "max_depth":         trial.suggest_int("max_depth", 3, 10),
-            "learning_rate":     trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "subsample":         trial.suggest_float("subsample", 0.6, 1.0),
-            "colsample_bytree":  trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "min_child_weight":  trial.suggest_int("min_child_weight", 1, 20),
-            "gamma":             trial.suggest_float("gamma", 0, 5),
-            "reg_alpha":         trial.suggest_float("reg_alpha", 0, 2),
-            "reg_lambda":        trial.suggest_float("reg_lambda", 0.5, 5),
-            "scale_pos_weight":  scale_pos,
-            "eval_metric":       "logloss",
-            "verbosity":         0,
-            "random_state":      42,
-            "n_jobs":            1,
+            "n_estimators":       trial.suggest_int("n_estimators", 100, 600),
+            "num_leaves":         trial.suggest_int("num_leaves", 15, 127),
+            "max_depth":          trial.suggest_int("max_depth", 3, 12),
+            "learning_rate":      trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "subsample":          trial.suggest_float("subsample", 0.6, 1.0),
+            "subsample_freq":     trial.suggest_int("subsample_freq", 1, 5),
+            "colsample_bytree":   trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "min_child_samples":  trial.suggest_int("min_child_samples", 5, 50),
+            "reg_alpha":          trial.suggest_float("reg_alpha", 0, 2),
+            "reg_lambda":         trial.suggest_float("reg_lambda", 0, 5),
+            "scale_pos_weight":   scale_pos,
+            "verbose":            -1,
+            "random_state":       42,
+            "n_jobs":             1,
         }
-        model = XGBClassifier(**params)
+        model = LGBMClassifier(**params)
         scores = cross_val_score(model, X, y, cv=cv, scoring="roc_auc", n_jobs=1)
         return scores.mean()
 
@@ -119,17 +129,16 @@ def train_market(market: str, n_trials: int = 80):
     # 最佳參數訓練
     best_params = {**study.best_params,
                    "scale_pos_weight": scale_pos,
-                   "eval_metric": "logloss",
-                   "verbosity": 0,
+                   "verbose": -1,
                    "random_state": 42,
                    "n_jobs": 1}
 
-    # Train/test split 用全量資料
-    from sklearn.model_selection import train_test_split
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2,
                                                 random_state=42, stratify=y)
-    model = XGBClassifier(**best_params)
-    model.fit(X_tr, y_tr, eval_set=[(X_te, y_te)], verbose=False)
+    model = LGBMClassifier(**best_params)
+    model.fit(X_tr, y_tr,
+              eval_set=[(X_te, y_te)],
+              callbacks=[])
 
     y_pred = model.predict(X_te)
     y_prob = model.predict_proba(X_te)[:, 1]
@@ -149,8 +158,8 @@ def train_market(market: str, n_trials: int = 80):
     print("  特徵重要性 Top 8：")
     for feat, imp in imps[:8]:
         label = feat_labels.get(feat, feat)
-        bar   = "█" * int(imp * 60)
-        print(f"    {label:20s} {bar} {imp:.3f}")
+        bar   = "█" * int(imp / max(imps[0][1], 1) * 40)
+        print(f"    {label:20s} {bar} {imp:.0f}")
 
     print(f"\n  最佳參數：")
     for k, v in study.best_params.items():
@@ -160,7 +169,7 @@ def train_market(market: str, n_trials: int = 80):
 
 
 def main():
-    print("=== 妖幣雷達 ML 訓練 v3 (Optuna) ===")
+    print("=== 妖幣雷達 ML 訓練 v4 (LightGBM + Optuna) ===")
     print(f"資料庫: {DB_PATH}")
 
     if not DB_PATH.exists():
@@ -174,7 +183,7 @@ def main():
             models[market] = model
             out = f"model_{market}.pkl"
             joblib.dump({"model": model, "features": ALL_FEATURES}, out)
-            print(f"\n  💾 已儲存: {out}")
+            print(f"\n  [saved] {out}")
 
     print(f"\n{'='*48}")
     print(f"訓練完成！共 {len(models)} 個模型")

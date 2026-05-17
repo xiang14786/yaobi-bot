@@ -212,7 +212,8 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
     try:
         import time as _t
         from db import save_ml_scan
-        for c in sorted(data, key=lambda x: x.total_score, reverse=True)[:30]:
+        _dow = datetime.now().weekday()
+        for _rank, c in enumerate(sorted(data, key=lambda x: x.total_score, reverse=True)[:30], 1):
             save_ml_scan(
                 symbol=c.symbol, market="crypto",
                 total_score=c.total_score, early_score=c.score_early,
@@ -230,6 +231,7 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
                     c.score_onchain > 5,
                     c.score_structure > 60,
                 ]),
+                dow=_dow, rank_in_session=_rank,
             )
     except Exception as _e:
         log.debug(f"[ML] crypto 儲存失敗: {_e}")
@@ -459,7 +461,8 @@ async def get_us_scan(force=False) -> list[UsStockMetrics]:
     # ML 真實特徵儲存（前 30 高分）
     try:
         from db import save_ml_scan
-        for m in sorted(data, key=lambda x: x.total_score, reverse=True)[:30]:
+        _dow = datetime.now().weekday()
+        for _rank, m in enumerate(sorted(data, key=lambda x: x.total_score, reverse=True)[:30], 1):
             save_ml_scan(
                 symbol=m.ticker, market="us",
                 total_score=m.total_score, early_score=m.early_score,
@@ -471,6 +474,7 @@ async def get_us_scan(force=False) -> list[UsStockMetrics]:
                 feat4=m.inst_pct,       # 法人持股
                 btc_change_24h=_BTC_TREND.get("change_24h", 0.0),
                 consistency_score=0,    # 美股無加密指標
+                dow=_dow, rank_in_session=_rank,
             )
     except Exception as _e:
         log.debug(f"[ML] us 儲存失敗: {_e}")
@@ -770,7 +774,8 @@ async def get_tw_scan(force=False) -> list[TwStockMetrics]:
     # ML 真實特徵儲存（前 30 高分）
     try:
         from db import save_ml_scan
-        for m in sorted(data, key=lambda x: x.total_score, reverse=True)[:30]:
+        _dow = datetime.now().weekday()
+        for _rank, m in enumerate(sorted(data, key=lambda x: x.total_score, reverse=True)[:30], 1):
             save_ml_scan(
                 symbol=m.stock_id, market="tw",
                 total_score=m.total_score, early_score=m.early_score,
@@ -782,6 +787,7 @@ async def get_tw_scan(force=False) -> list[TwStockMetrics]:
                 feat4=m.margin_change_pct,    # 融資變化
                 btc_change_24h=_BTC_TREND.get("change_24h", 0.0),
                 consistency_score=0,    # 台股無加密指標
+                dow=_dow, rank_in_session=_rank,
             )
     except Exception as _e:
         log.debug(f"[ML] tw 儲存失敗: {_e}")

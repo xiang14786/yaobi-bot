@@ -90,6 +90,8 @@ def init_db():
                 feat4         REAL,   -- crypto:oi_change    / tw:margin_change  / us:inst_pct
                 btc_change_24h  REAL DEFAULT 0,  -- BTC當時24h漲跌幅（市場環境特徵）
                 consistency_score INTEGER DEFAULT 0, -- 指標一致性（0~5個同向）
+                dow             INTEGER DEFAULT -1,  -- 星期幾 0=週一~4=週五
+                rank_in_session INTEGER DEFAULT -1,  -- 同批掃描排名（1=最高）
                 outcome_pct   REAL,   -- N天後漲跌幅（NULL=未標籤）
                 outcome_label INTEGER,-- 1=漲>3% / 0=平 / -1=跌>3%
                 labeled_ts    INTEGER
@@ -98,8 +100,10 @@ def init_db():
     # 舊 DB 相容：加入新欄位（已存在則忽略）
     with _conn() as c:
         for col, typedef in [
-            ("btc_change_24h",   "REAL DEFAULT 0"),
-            ("consistency_score","INTEGER DEFAULT 0"),
+            ("btc_change_24h",    "REAL DEFAULT 0"),
+            ("consistency_score", "INTEGER DEFAULT 0"),
+            ("dow",               "INTEGER DEFAULT -1"),
+            ("rank_in_session",   "INTEGER DEFAULT -1"),
         ]:
             try:
                 c.execute(f"ALTER TABLE ml_scan_data ADD COLUMN {col} {typedef}")
@@ -295,7 +299,8 @@ def save_ml_scan(symbol: str, market: str, total_score: float, early_score: floa
                  confidence: float, price: float, change_pct: float,
                  feat1: float = 0, feat2: float = 0,
                  feat3: float = 0, feat4: float = 0,
-                 btc_change_24h: float = 0, consistency_score: int = 0):
+                 btc_change_24h: float = 0, consistency_score: int = 0,
+                 dow: int = -1, rank_in_session: int = -1):
     """儲存掃描結果供 ML 訓練用"""
     ts = int(_time_module.time())
     with _conn() as c:
@@ -303,11 +308,11 @@ def save_ml_scan(symbol: str, market: str, total_score: float, early_score: floa
             INSERT INTO ml_scan_data
               (symbol, market, scan_ts, total_score, early_score, confidence,
                price, change_pct, feat1, feat2, feat3, feat4,
-               btc_change_24h, consistency_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               btc_change_24h, consistency_score, dow, rank_in_session)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (symbol, market, ts, total_score, early_score, confidence,
               price, change_pct, feat1, feat2, feat3, feat4,
-              btc_change_24h, consistency_score))
+              btc_change_24h, consistency_score, dow, rank_in_session))
 
 
 def get_unlabeled_ml_data(days_ago: int = 5) -> list[dict]:

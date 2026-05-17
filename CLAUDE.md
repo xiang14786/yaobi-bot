@@ -250,10 +250,44 @@ fly machine start <machine_id> -a yaobi-bot-tw
 
 ---
 
+## 2026-05-18 ML 訓練升級（下午）
+
+### LightGBM 取代 XGBoost
+- `train_ml.py` 升級為 v4，改用 `LGBMClassifier`
+- Optuna 參數空間換成 LightGBM 的：`num_leaves`、`min_child_samples`、`subsample_freq`
+- 移除 XGBoost 專用參數：`gamma`、`eval_metric`、`verbosity`
+- 加入缺欄位保護：`btc_change_24h` / `consistency_score` 若不在 DB 自動補 0
+
+### 訓練結果（2026-05-18，18195 筆資料）
+| 市場 | CV AUC | 測試 AUC | 判斷 |
+|------|--------|---------|------|
+| Crypto | 0.5951 | 0.600 | 正常，無 overfit |
+| TW | 0.6516 | 0.644 | 健康 |
+| US | 0.6516 | 0.637 | 輕微 overfit，合理 |
+
+### 特徵重要性發現
+- 加密：`long_short`（多空比）最重要
+- 台股：`margin_chg`（融資變化）最重要
+- 美股：`feat1x2`（RS×A/D 交叉特徵）最重要
+- `btc_change_24h` / `consistency_score` 因舊資料補 0，重要性低 → 待新資料累積
+
+---
+
+## 2026-05-18 ML 特徵升級（晚）
+
+### 新增特徵：dow + rank_in_session
+- **`db.py`**：`ml_scan_data` 表加兩欄 `dow INTEGER DEFAULT -1`、`rank_in_session INTEGER DEFAULT -1`
+- **`db.py`**：`init_db()` ALTER TABLE 相容舊 DB，`save_ml_scan()` 加入兩個新參數
+- **`tg_bot_v2.py`**：三市場掃描迴圈改用 `enumerate(..., 1)` 取得排名，傳入 `dow=datetime.now().weekday()` 與 `rank_in_session=_rank`
+- **`train_ml.py`**：`FEATURES` 加入 `"dow"`、`"rank_in_session"`；缺欄位保護補 -1
+- 重新訓練確認：AUC 維持不變（預期，舊資料全為 -1，效果待新資料累積後顯現）
+
+---
+
 ## 待完成
 - `/tw_status` 加入法人聯手計數顯示（小功能）
 - 確認新用戶 `/start` 無回應的根本原因
-- 長期：5天後有新標籤資料，重新拉 DB 訓練，觀察 AUC 是否提升（目標 0.70+）
+- **長期**：5天後重新拉 DB（`fly sftp` 下載 `/data/yaobi.db` 改名 `yaobi_fly.db`）重訓，目標 AUC 0.68+（屆時 dow/rank 有真實值）
 
 ## 已知問題 / 注意事項
 - PowerShell 寫 fly.toml 需注意 BOM 編碼問題（用 `New-Object System.Text.UTF8Encoding $false`）
@@ -272,3 +306,18 @@ fly machine start <machine_id> -a yaobi-bot-tw
 - 不需要過多解釋，直接給指令或程式碼
 - 部署在 Fly.io 免費額度內（信用卡掛著但 $0 spending limit）
 - 每天至少優化一次 bot
+
+## CLAUDE.md 維護規則（強制）
+每次對話結束前，必須更新 CLAUDE.md，確保以下資訊同步：
+
+1. **工作記錄**：在對應日期的區塊補上本次所有變更（修復/優化/升級）
+2. **待完成**：已完成的項目從「待完成」移除；新發現的問題或計畫加進去
+3. **已知問題**：新發現的 bug 或注意事項補進「已知問題 / 注意事項」
+4. **版本號**：若有功能升級，更新專案概述的版本號
+5. **檔案說明**：若新增或刪除檔案，更新「主要檔案」表格
+
+同步原則：
+- CLAUDE.md 是唯一的專案記憶來源，所有 AI 都依賴它
+- 不允許「程式碼改了但 CLAUDE.md 沒更新」的情況
+- 不允許「待完成還列著已完成的項目」
+- 每次 git commit 前確認 CLAUDE.md 已更新
