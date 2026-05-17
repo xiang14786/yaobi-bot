@@ -3362,18 +3362,39 @@ async def cb_alert_hold(update, ctx):
 
 async def cmd_ml_status(update, ctx):
     """顯示 ML 訓練資料收集進度"""
+    import time as _t
     stats = _db.get_ml_stats()
     total   = stats["total"]
     labeled = stats["labeled"]
     by_mkt  = stats["by_market"]
     pct = labeled / total * 100 if total else 0
+
+    # 查最近一筆收集時間（未標籤 = bot 自動收集的真實資料）
+    with _db._conn() as c:
+        row_recent = c.execute(
+            "SELECT scan_ts, market FROM ml_scan_data WHERE outcome_pct IS NULL ORDER BY scan_ts DESC LIMIT 1"
+        ).fetchone()
+        today_count = c.execute(
+            "SELECT COUNT(*) FROM ml_scan_data WHERE scan_ts > ? AND outcome_pct IS NULL",
+            (int(_t.time()) - 86400,)
+        ).fetchone()[0]
+
+    if row_recent:
+        from datetime import datetime, timezone
+        last_ts = datetime.fromtimestamp(row_recent["scan_ts"]).strftime("%m/%d %H:%M")
+        last_mkt = row_recent["market"]
+        recent_str = f"最近收集：`{last_ts}` ({last_mkt})  今日新增：`{today_count}` 筆"
+    else:
+        recent_str = "尚無 bot 自動收集資料"
+
     msg = (
         f"🤖 *ML 訓練資料收集進度*\n\n"
         f"總筆數：`{total}`  已標籤：`{labeled}` ({pct:.0f}%)\n"
         f"加密：`{by_mkt.get('crypto', 0)}`  "
         f"台股：`{by_mkt.get('tw', 0)}`  "
         f"美股：`{by_mkt.get('us', 0)}`\n\n"
-        f"_目標：累積 1000 筆標籤資料後可開始訓練模型_"
+        f"📡 {recent_str}\n\n"
+        f"_每次背景掃描自動儲存前 30 高分標的_"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
