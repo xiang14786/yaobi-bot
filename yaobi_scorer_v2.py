@@ -16,6 +16,8 @@ from collections import deque
 from dataclasses import dataclass, field
 
 import aiohttp
+import logging
+log = logging.getLogger(__name__)
 
 from structure_analyzer import (
     parse_klines, score_structure, Kline,

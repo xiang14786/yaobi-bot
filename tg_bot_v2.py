@@ -2049,6 +2049,7 @@ async def cmd_alert(update, ctx):
 # ============================================================
 async def background_watchlist_monitor(ctx):
     """每 30 分鐘掃描所有用戶的自選股，觸發條件時推送通知"""
+    _prune_sent_alerts()  # 清理過期警報，防記憶體洩漏
     if not WATCHLISTS:
         return
 
