@@ -1709,7 +1709,12 @@ async def push_pre_warning(ctx):
         coins = await get_scan(force=True)
     except Exception as e:
         log.exception(e); return
-    pre_pump = find_pre_pump(coins)[:3]
+    pre_pump_raw = find_pre_pump(coins)
+    # 過濾：跌幅 < -8% 且早分 < 12 → 無動能支撐的下跌，不推
+    pre_pump = [
+        c for c in pre_pump_raw
+        if not (c.price_change_pct < -8 and c.score_early < 12)
+    ][:3]
     pre_dump = find_pre_dump(coins)[:3]
     if not pre_pump and not pre_dump:
         return
