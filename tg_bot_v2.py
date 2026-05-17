@@ -172,6 +172,12 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
 def get_user_filter(uid):
     return {**DEFAULT_FILTERS_V2, **USER_FILTERS.get(uid, {})}
 
+def get_tw_filter(uid):
+    return {**DEFAULT_TW_FILTERS, **TW_USER_FILTERS.get(uid, {})}
+
+def get_us_filter(uid):
+    return {**DEFAULT_US_FILTERS, **US_USER_FILTERS.get(uid, {})}
+
 def fmt_card(c: CoinMetricsV2, rank=None, show_triggers=True) -> str:
     """
     格式化單一標的卡片。
@@ -815,7 +821,9 @@ def generate_tw_trade_advice(m: TwStockMetrics) -> str:
 async def cmd_tw_scan(update, ctx):
     await update.message.reply_text(_tw_wait_msg())
     stocks   = await get_tw_scan()
-    filtered = find_tw_pre_pump(stocks)
+    uid = update.effective_user.id
+    f = get_tw_filter(uid)
+    filtered = apply_tw_filters(find_tw_pre_pump(stocks), f)
     text = fmt_tw_list(filtered, f"🔋 台股預備暴漲榜 ({len(filtered)} 命中)")
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                     disable_web_page_preview=True)
@@ -1490,22 +1498,73 @@ async def cmd_set_max_change(update, ctx):
     await update.message.reply_text(f"✅ 最大已動幅度 = {v}%")
 
 async def cmd_myfilters(update, ctx):
-    f = get_user_filter(update.effective_user.id)
+    uid = update.effective_user.id
+    fc  = get_user_filter(uid)
+    ftw = get_tw_filter(uid)
+    fus = get_us_filter(uid)
     msg = (
         "*你的篩選設定*\n\n"
-        f"最低總分: `{f['min_total_score']}`\n"
-        f"最低早分: `{f['min_early_score']}`\n"
-        f"最大已動 %: `{f['max_price_change_pct']}`\n"
-        f"最低成交額: `${f['min_quote_volume_usd']/1e6:.0f}M`\n"
-        f"排除穩定幣: `{f['exclude_stablecoins']}`"
+        "🪙 *加密*\n"
+        f"  最低總分: `{fc['min_total_score']}`  最低早分: `{fc['min_early_score']}`\n"
+        f"  最大已動: `{fc['max_price_change_pct']}%`\n\n"
+        "🇹🇼 *台股*\n"
+        f"  最低總分: `{ftw['min_total_score']}`  最低領先分: `{ftw['min_early_score']}`\n\n"
+        "🇺🇸 *美股*\n"
+        f"  最低總分: `{fus['min_score']}`  最低早分: `{fus['min_early']}`\n\n"
+        "指令：`/set_score` `/set_early` `/set_max_change`（加密）\n"
+        "`/set_tw_score` `/set_tw_early`（台股）\n"
+        "`/set_us_score` `/set_us_early`（美股）\n"
+        "`/reset` 重設所有為預設值"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_set_tw_score(update, ctx):
+    try:
+        v = float(ctx.args[0]); assert 20 <= v <= 95
+    except:
+        await update.message.reply_text("用法: `/set_tw_score 45`  (預設 45)", parse_mode=ParseMode.MARKDOWN); return
+    uid = update.effective_user.id
+    TW_USER_FILTERS.setdefault(uid, {})["min_total_score"] = v
+    _db.save_user_filter(uid, "tw", TW_USER_FILTERS[uid])
+    await update.message.reply_text(f"✅ 台股最低總分 = {v}")
+
+async def cmd_set_tw_early(update, ctx):
+    try:
+        v = float(ctx.args[0]); assert 0 <= v <= 80
+    except:
+        await update.message.reply_text("用法: `/set_tw_early 20`  (預設 20)", parse_mode=ParseMode.MARKDOWN); return
+    uid = update.effective_user.id
+    TW_USER_FILTERS.setdefault(uid, {})["min_early_score"] = v
+    _db.save_user_filter(uid, "tw", TW_USER_FILTERS[uid])
+    await update.message.reply_text(f"✅ 台股最低領先分 = {v}")
+
+async def cmd_set_us_score(update, ctx):
+    try:
+        v = float(ctx.args[0]); assert 20 <= v <= 95
+    except:
+        await update.message.reply_text("用法: `/set_us_score 45`  (預設 45)", parse_mode=ParseMode.MARKDOWN); return
+    uid = update.effective_user.id
+    US_USER_FILTERS.setdefault(uid, {})["min_score"] = v
+    _db.save_user_filter(uid, "us", US_USER_FILTERS[uid])
+    await update.message.reply_text(f"✅ 美股最低總分 = {v}")
+
+async def cmd_set_us_early(update, ctx):
+    try:
+        v = float(ctx.args[0]); assert 0 <= v <= 80
+    except:
+        await update.message.reply_text("用法: `/set_us_early 18`  (預設 18)", parse_mode=ParseMode.MARKDOWN); return
+    uid = update.effective_user.id
+    US_USER_FILTERS.setdefault(uid, {})["min_early"] = v
+    _db.save_user_filter(uid, "us", US_USER_FILTERS[uid])
+    await update.message.reply_text(f"✅ 美股最低早分 = {v}")
 
 async def cmd_reset(update, ctx):
     uid = update.effective_user.id
     USER_FILTERS.pop(uid, None)
-    _db.delete_user_filter(uid, "crypto")
-    await update.message.reply_text("✅ 已重設為預設值")
+    TW_USER_FILTERS.pop(uid, None)
+    US_USER_FILTERS.pop(uid, None)
+    _db.delete_user_filter(uid, None)  # None = 清除該用戶所有市場
+    await update.message.reply_text("✅ 三市場篩選已全部重設為預設值")
 
 # ============================================================
 # 訂閱
@@ -3044,6 +3103,8 @@ async def post_init(app):
     TW_SUBSCRIBERS.update(_subs["tw"])
     US_SUBSCRIBERS.update(_subs["us"])
     USER_FILTERS.update(_db.load_user_filters("crypto"))
+    TW_USER_FILTERS.update(_db.load_user_filters("tw"))
+    US_USER_FILTERS.update(_db.load_user_filters("us"))
     log.info(f"[DB] 載入自選股 {sum(len(v) for v in WATCHLISTS.values())} 筆，"
              f"警報設定 {len(WATCH_CONDITIONS)} 用戶，"
              f"訂閱 general={len(SUBSCRIBERS)} pre={len(PRE_PUMP_SUBSCRIBERS)} "
@@ -3458,6 +3519,14 @@ def main():
         ("set_early",      cmd_set_early),
         ("set_max_change", cmd_set_max_change),
         ("myfilters",      cmd_myfilters),
+        ("set_tw_score",   cmd_set_tw_score),
+        ("set_tw_early",   cmd_set_tw_early),
+        ("set_us_score",   cmd_set_us_score),
+        ("set_us_early",   cmd_set_us_early),
+        ("settw_score",    cmd_set_tw_score),
+        ("settw_early",    cmd_set_tw_early),
+        ("setus_score",    cmd_set_us_score),
+        ("setus_early",    cmd_set_us_early),
         ("reset",          cmd_reset),
         # 訂閱
         ("sub_pre",        cmd_sub_pre),
