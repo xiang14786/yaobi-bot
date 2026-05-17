@@ -163,13 +163,19 @@ _BTC_TREND: dict = {"change_24h": 0.0, "above_ma20": True, "last_update": 0}
 # 共用
 # ============================================================
 def _update_btc_trend(coins: list) -> None:
-    """更新 BTC 大盤趨勢狀態"""
+    """更新 BTC 大盤趨勢狀態，並同步給評分模組使用"""
     global _BTC_TREND
     for c in coins:
         if c.symbol == "BTCUSDT":
             _BTC_TREND["change_24h"] = c.price_change_pct
             _BTC_TREND["above_ma20"] = c.total_score > 40
             _BTC_TREND["last_update"] = time.time()
+            # 同步給 yaobi_scorer_v2 評分乘數使用
+            try:
+                import yaobi_scorer_v2 as _ysv
+                _ysv._BTC_CHANGE_24H = c.price_change_pct
+            except Exception:
+                pass
             break
 
 
@@ -202,6 +208,14 @@ async def get_scan(force=False) -> list[CoinMetricsV2]:
                 feat2=c.long_short_ratio,       # 真實多空比
                 feat3=c.top_trader_ls_ratio,    # 真實頂級多空比
                 feat4=getattr(c, "oi_change_pct", 0.0),  # OI 變化
+                btc_change_24h=_BTC_TREND.get("change_24h", 0.0),
+                consistency_score=sum([
+                    c.score_early > 20,
+                    c.funding_rate < 0,
+                    c.long_short_ratio > 1.1,
+                    c.score_onchain > 5,
+                    c.score_structure > 60,
+                ]),
             )
     except Exception as _e:
         log.debug(f"[ML] crypto 儲存失敗: {_e}")
@@ -441,6 +455,8 @@ async def get_us_scan(force=False) -> list[UsStockMetrics]:
                 feat2=m.accum_score,    # 法人累積分
                 feat3=m.momentum_score, # 動能分
                 feat4=m.inst_pct,       # 法人持股
+                btc_change_24h=_BTC_TREND.get("change_24h", 0.0),
+                consistency_score=0,    # 美股無加密指標
             )
     except Exception as _e:
         log.debug(f"[ML] us 儲存失敗: {_e}")
@@ -750,6 +766,8 @@ async def get_tw_scan(force=False) -> list[TwStockMetrics]:
                 feat2=m.foreign_streak,       # 連買天數
                 feat3=m.score_bb,             # BB 壓縮分
                 feat4=m.margin_change_pct,    # 融資變化
+                btc_change_24h=_BTC_TREND.get("change_24h", 0.0),
+                consistency_score=0,    # 台股無加密指標
             )
     except Exception as _e:
         log.debug(f"[ML] tw 儲存失敗: {_e}")

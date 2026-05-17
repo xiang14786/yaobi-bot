@@ -46,7 +46,7 @@ WEIGHTS_V2 = {
 
 DEFAULT_FILTERS_V2 = {
     "min_total_score": 55,
-    "min_early_score": 40,           # 必須有領先訊號
+    "min_early_score": 30,           # 必須有領先訊號（一致性門檻已補充質量把關）
     "max_price_change_pct": 15.0,    # 已漲跌 >15% 視為「已晚」
     "min_quote_volume_usd": 3e7,
     "exclude_stablecoins": True,
@@ -56,6 +56,7 @@ STABLE_TOKENS = {"USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USDT"}
 
 # 簡易記憶體歷史 (儲存近 N 期 OI/費率/多空比 用於計算變化率)
 _HISTORY_CACHE: dict = {}
+_BTC_CHANGE_24H: float = 0.0  # 由 tg_bot_v2 更新，供評分乘數使用
 _HISTORY_MAX_SIZE = 200  # 最多快取 200 個幣，防止記憶體洩漏
 _HISTORY_LEN = 12
 
@@ -418,6 +419,35 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
                 + m.score_sentiment * WEIGHTS_V2["sentiment"]
                 + m.score_onchain   * WEIGHTS_V2["on_chain"]
             )
+
+            # === BTC 市場環境乘數 ===
+            btc_chg = _BTC_CHANGE_24H
+            if btc_chg > 2:
+                market_mult = 1.08
+            elif btc_chg < -3:
+                market_mult = 0.85
+            else:
+                market_mult = 1.0
+            m.total_score *= market_mult
+
+            # === 一致性獎勵：多指標同向加分 ===
+            consistency_checks = [
+                m.score_early > 20,
+                m.funding_rate < 0,
+                m.long_short_ratio > 1.1,
+                m.score_onchain > 5,
+                m.score_structure > 60,
+            ]
+            n_agree = sum(consistency_checks)
+            if n_agree >= 5:
+                m.total_score += 12
+            elif n_agree == 4:
+                m.total_score += 7
+            elif n_agree == 3:
+                m.total_score += 3
+            elif n_agree <= 1:
+                m.total_score -= 5
+            m.total_score = max(0, min(100, m.total_score))
 
             # 方向判斷 - 優先參考 early_bias
             if "PRE_PUMP" in m.early_bias:
