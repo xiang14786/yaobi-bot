@@ -54,6 +54,7 @@ STABLE_TOKENS = {"USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USDT"}
 
 # 簡易記憶體歷史 (儲存近 N 期 OI/費率/多空比 用於計算變化率)
 _HISTORY_CACHE: dict = {}
+_HISTORY_MAX_SIZE = 200  # 最多快取 200 個幣，防止記憶體洩漏
 _HISTORY_LEN = 12
 
 
@@ -383,7 +384,7 @@ async def fetch_all_metrics_v2(top_n: int = 50) -> list[CoinMetricsV2]:
                 m.triggers = leading.triggers
 
             except Exception as e:
-                pass
+                log.warning(f"[V2] leading indicators failed for {sym}: {e}")
 
             # 估算 (用於原 7 維)
             m.market_cap = max(m.open_interest_usd * 5, 1e6)

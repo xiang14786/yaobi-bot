@@ -494,7 +494,7 @@ def recalc_rs_ratings(metrics: list) -> list:
     n = len(valid_sorted)
     for rank, (i, m) in enumerate(valid_sorted):
         percentile = rank / (n - 1) * 99 if n > 1 else 50
-        m.rs_rating = round(percentile, 1)
+        m.rs_rating = min(99.0, round(percentile, 1))
         # 更新 rs_score
         if m.rs_rating >= 90:
             m.rs_score = 15.0

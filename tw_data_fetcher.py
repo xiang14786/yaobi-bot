@@ -263,10 +263,10 @@ def _fetch_t86_sync() -> dict[str, dict]:
                                 continue
                             n = len(row)
                             result[sid] = {
-                                "foreign": _parse_int(row[idx_foreign]) if idx_foreign < n else 0,
-                                "trust":   _parse_int(row[idx_trust])   if idx_trust   < n else 0,
-                                "dealer":  _parse_int(row[idx_dealer])  if idx_dealer  < n else 0,
-                                "total":   _parse_int(row[idx_total])   if idx_total   < n else 0,
+                                "foreign": _parse_int(row[idx_foreign]) if 0 <= idx_foreign < n else 0,
+                                "trust":   _parse_int(row[idx_trust])   if 0 <= idx_trust   < n else 0,
+                                "dealer":  _parse_int(row[idx_dealer])  if 0 <= idx_dealer  < n else 0,
+                                "total":   _parse_int(row[idx_total])   if 0 <= idx_total   < n else 0,
                             }
                         if result:
                             log.info(f"[TW] T86 session/{ds}: 成功解析 {len(result)} 支")
@@ -359,10 +359,10 @@ def _fetch_t86_for_date(target_date: date) -> dict[str, dict] | None:
                 continue
             n = len(row)
             result[sid] = {
-                "foreign": _parse_int(row[idx_foreign]) if idx_foreign < n else 0,
-                "trust":   _parse_int(row[idx_trust])   if idx_trust   < n else 0,
-                "dealer":  _parse_int(row[idx_dealer])  if idx_dealer  < n else 0,
-                "total":   _parse_int(row[idx_total])   if idx_total   < n else 0,
+                "foreign": _parse_int(row[idx_foreign]) if 0 <= idx_foreign < n else 0,
+                "trust":   _parse_int(row[idx_trust])   if 0 <= idx_trust   < n else 0,
+                "dealer":  _parse_int(row[idx_dealer])  if 0 <= idx_dealer  < n else 0,
+                "total":   _parse_int(row[idx_total])   if 0 <= idx_total   < n else 0,
             }
         return result if result else None
     except Exception as e:
@@ -536,10 +536,10 @@ async def fetch_one_stock(
             if last_sign is None:
                 last_sign = sign
             if sign == last_sign:
-                streak += sign
+                streak += 1  # 累計天數（正=買超，last_sign 記方向）
             else:
                 break
-        result.foreign_streak = streak
+        result.foreign_streak = streak * (last_sign if last_sign else 1)
 
     # ── 融資融券 ──────────────────────────────
     mgn_hist = (margin_history or {}).get(stock_id, [])

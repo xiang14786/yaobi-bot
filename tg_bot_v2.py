@@ -112,10 +112,16 @@ US_CACHE_TTL   = 600   # 10 分鐘
 US_SUBSCRIBERS: set = set()
 US_USER_FILTERS: dict = {}
 
-# 美股交易時段（美東 EDT UTC-4，夏令 3-11 月）
+# 美股交易時段（自動判斷夏令/冬令）
 US_MARKET_OPEN  = dtime(9, 30)
 US_MARKET_CLOSE = dtime(16, 0)
-ET_TZ = timezone(timedelta(hours=-4))  # EDT（夏令時）
+
+def _et_tz() -> timezone:
+    """自動判斷美東時區：3-11月 EDT(UTC-4)，其餘 EST(UTC-5)"""
+    m = datetime.now(timezone.utc).month
+    return timezone(timedelta(hours=-4 if 3 <= m <= 11 else -5))
+
+ET_TZ = _et_tz()  # 啟動時設定，每次重啟自動更新
 
 # ============================================================
 # Phase 3: 自選股 & 警報
@@ -129,8 +135,17 @@ WATCHLISTS: dict[int, set] = {}
 # }
 WATCH_CONDITIONS: dict[int, dict] = {}
 
-# 紀錄已推送過的警報（避免重複）key = (user_id, symbol, alert_type)
-_SENT_ALERTS: set = set()
+# 紀錄已推送過的警報（避免重複）key = (user_id, symbol, alert_type) → timestamp
+_SENT_ALERTS: dict = {}  # key→送出時間，TTL 24小時
+_SENT_ALERTS_TTL = 86400  # 24小時後自動過期
+
+def _prune_sent_alerts():
+    """清除超過 TTL 的警報紀錄，防止記憶體洩漏"""
+    import time as _t
+    now = _t.time()
+    expired = [k for k, ts in _SENT_ALERTS.items() if now - ts > _SENT_ALERTS_TTL]
+    for k in expired:
+        del _SENT_ALERTS[k]
 
 # Phase 2 擴充：自訂 TP/SL 暫存（user_id → 待確認進場資訊）
 _PENDING_CUSTOM: dict[int, dict] = {}
@@ -373,7 +388,7 @@ def tw_market_status() -> str:
 # V2.3: 美股工具函式
 # ============================================================
 def us_market_status() -> str:
-    now = datetime.now(ET_TZ)   # 美東時區
+    now = datetime.now(_et_tz())  # 美東時區（自動夏令/冬令）
     if now.weekday() >= 5:
         return "⛔ 週末休市"
     t = now.time()
@@ -637,7 +652,7 @@ async def cmd_us_detail(update, ctx):
 async def cmd_us_status(update, ctx):
     n = len(US_CACHE.get("data", []))
     mkt = us_market_status()
-    et_now = datetime.now(ET_TZ)
+    et_now = datetime.now(_et_tz())
     msg = (
         f"🇺🇸 *美股 Bot 狀態*\n\n"
         f"市場: {mkt}\n"
@@ -2070,50 +2085,50 @@ async def background_watchlist_monitor(ctx):
                 # 外資連買警報
                 key_streak = (uid, sym, "foreign_streak")
                 if streak >= streak_min and key_streak not in _SENT_ALERTS:
-                    _SENT_ALERTS.add(key_streak)
+                    _SENT_ALERTS[key_streak] = _time.time()
                     alerts.append(
                         f"🏦 *{sym} {m.name}* 外資連買 `{streak}天`\n"
                         f"   收盤 `{m.close:.2f}`  法人合計 `{m.institutional_net/1e8:+.2f}億`"
                     )
                 elif streak < streak_min:
-                    _SENT_ALERTS.discard(key_streak)
+                    _SENT_ALERTS.pop(key_streak, None)
 
                 # 預警：評分達到門檻但未達到「完全啟動」
                 key_pre = (uid, sym, "pre_warn")
                 if pre_warn <= score_pct < 0.90 and key_pre not in _SENT_ALERTS:
-                    _SENT_ALERTS.add(key_pre)
+                    _SENT_ALERTS[key_pre] = _time.time()
                     alerts.append(
                         f"⚡ *{sym} {m.name}* 評分預警 `{m.total_score:.0f}分`（{score_pct:.0%}）\n"
                         f"   {m.direction}  漲跌 `{m.change_pct:+.2f}%`"
                     )
                 elif score_pct < pre_warn:
-                    _SENT_ALERTS.discard(key_pre)
+                    _SENT_ALERTS.pop(key_pre, None)
 
             # ── 加密 ──
             elif mc := next((c for c in coins if c.base == sym), None):
                 score_pct = mc.total_score / CRYPTO_MAX
                 key_pre   = (uid, sym, "pre_warn")
                 if pre_warn <= score_pct < 0.90 and key_pre not in _SENT_ALERTS:
-                    _SENT_ALERTS.add(key_pre)
+                    _SENT_ALERTS[key_pre] = _time.time()
                     alerts.append(
                         f"⚡ *{sym}/USDT* 評分預警 `{mc.total_score:.0f}分`（{score_pct:.0%}）\n"
                         f"   {mc.direction}  價格 `${mc.last_price:,.4f}`"
                     )
                 elif score_pct < pre_warn:
-                    _SENT_ALERTS.discard(key_pre)
+                    _SENT_ALERTS.pop(key_pre, None)
 
             # ── 美股 ──
             elif mu := next((s for s in us_stocks if s.ticker == sym), None):
                 score_pct = mu.total_score / US_MAX_SCORE
                 key_pre   = (uid, sym, "pre_warn")
                 if pre_warn <= score_pct < 0.90 and key_pre not in _SENT_ALERTS:
-                    _SENT_ALERTS.add(key_pre)
+                    _SENT_ALERTS[key_pre] = _time.time()
                     alerts.append(
                         f"⚡ *{sym}* 評分預警 `{mu.total_score:.0f}分`（{score_pct:.0%}）\n"
                         f"   {mu.direction}  收盤 `${mu.close:.2f}`"
                     )
                 elif score_pct < pre_warn:
-                    _SENT_ALERTS.discard(key_pre)
+                    _SENT_ALERTS.pop(key_pre, None)
 
         if alerts:
             header = f"🔔 *自選股警報*（{datetime.now(TW_TZ).strftime('%m/%d %H:%M')} 台時）\n\n"
