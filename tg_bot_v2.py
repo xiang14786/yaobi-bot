@@ -135,6 +135,11 @@ _SENT_ALERTS: set = set()
 # Phase 2 擴充：自訂 TP/SL 暫存（user_id → 待確認進場資訊）
 _PENDING_CUSTOM: dict[int, dict] = {}
 
+# TP/SL 互動警報暫存 {pos_id: {uid, sym, trigger, cur, pnl, ...}}
+PENDING_ALERTS: dict[int, dict] = {}
+# 使用者手動輸入新止損暫存 {user_id: pos_id}
+_PENDING_SL_INPUT: dict[int, int] = {}
+
 # ============================================================
 # 共用
 # ============================================================
@@ -2392,6 +2397,23 @@ async def cmd_tpsl(update, ctx):
         await update.message.reply_text("❌ 價格格式錯誤")
         return
 
+    # 攔截手動止損輸入
+    if uid in _PENDING_SL_INPUT:
+        pid = _PENDING_SL_INPUT.pop(uid)
+        try:
+            new_sl = float(update.effective_message.text.strip())
+            with _db._conn() as c:
+                c.execute("UPDATE positions SET sl_price=? WHERE id=?", (new_sl, pid))
+            PENDING_ALERTS.pop(pid, None)
+            info = PENDING_ALERTS.get(pid, {})
+            sym  = info.get("sym", "倉位")
+            await update.effective_message.reply_text(
+                f"✅ 止損已更新為 `{new_sl}`", parse_mode=ParseMode.MARKDOWN)
+        except ValueError:
+            await update.effective_message.reply_text("⚠️ 請輸入有效數字")
+            _PENDING_SL_INPUT[uid] = pid  # 放回等待
+        return
+
     pending = _PENDING_CUSTOM.pop(uid, None)
     if not pending or pending["symbol"] != symbol:
         await update.message.reply_text(
@@ -2706,19 +2728,34 @@ async def background_position_monitor(ctx):
                 sym, p["market"], direction, coins, tw_stocks, us_stocks)
 
             if has_reversal:
-                # 有反轉訊號 → 自動平倉
-                _db.close_position(p["id"], cur, entry, direction)
+                # 有反轉訊號 → 詢問是否平倉
                 pnl     = (cur - entry) / entry * 100 * (1 if direction == "long" else -1)
                 pnl_lev = pnl * p.get("leverage", 1)
                 lev_note = f"\n帶槓損益：`{pnl_lev:+.2f}%`" if p.get("leverage", 1) > 1 else ""
-                try:
-                    await ctx.bot.send_message(uid,
-                        f"🎯 *{sym}* 觸及止盈！\n\n"
-                        f"TP `{tp:.4f}` 已達成\n現價 `{cur:.4f}`\n損益 `{pnl:+.2f}%` 🟢{lev_note}\n\n"
-                        f"⚠️ *偵測到反轉訊號*：{reason}\n已自動平倉",
-                        parse_mode=ParseMode.MARKDOWN)
-                except Exception:
-                    pass
+                pid = p["id"]
+                if pid not in PENDING_ALERTS:
+                    try:
+                        keyboard = InlineKeyboardMarkup([[
+                            InlineKeyboardButton("✅ 是，關閉倉位", callback_data=f"alert_close:{pid}"),
+                            InlineKeyboardButton("📈 否，繼續持有", callback_data=f"alert_hold:{pid}"),
+                        ]])
+                        msg = await ctx.bot.send_message(uid,
+                            f"🎯 *{sym}* 觸及止盈！\n\n"
+                            f"TP `{tp:.4f}` 已達成\n現價 `{cur:.4f}`\n"
+                            f"損益 `{pnl:+.2f}%` 🟢{lev_note}\n\n"
+                            f"⚠️ *偵測到反轉訊號*：{reason}\n"
+                            f"是否關閉倉位？",
+                            parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+                        PENDING_ALERTS[pid] = {
+                            "uid": uid, "sym": sym, "trigger": "TP",
+                            "cur": cur, "pnl": pnl, "entry": entry,
+                            "direction": direction, "sl": sl, "tp": tp,
+                            "leverage": p.get("leverage", 1), "market": p["market"],
+                            "alert_count": 1, "last_alert_time": _time.time(),
+                            "msg_id": msg.message_id,
+                        }
+                    except Exception:
+                        pass
             else:
                 # 無反轉訊號 → 追蹤止盈：自動上調 TP/SL
                 atr_est = abs(tp - entry) * 0.4
@@ -2756,17 +2793,32 @@ async def background_position_monitor(ctx):
                     pass
 
         elif sl_hit:
-            _db.close_position(p["id"], cur, entry, direction)
             pnl     = (cur - entry) / entry * 100 * (1 if direction == "long" else -1)
             pnl_lev = pnl * p.get("leverage", 1)
             lev_note = f"\n帶槓損益：`{pnl_lev:+.2f}%`" if p.get("leverage", 1) > 1 else ""
-            try:
-                await ctx.bot.send_message(uid,
-                    f"🛑 *{sym}* 觸及止損！\n\n"
-                    f"SL `{sl:.4f}` 已觸及\n現價 `{cur:.4f}`\n損益 `{pnl:+.2f}%` 🔴{lev_note}",
-                    parse_mode=ParseMode.MARKDOWN)
-            except Exception:
-                pass
+            pid = p["id"]
+            if pid not in PENDING_ALERTS:
+                try:
+                    keyboard = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("✅ 是，關閉倉位", callback_data=f"alert_close:{pid}"),
+                        InlineKeyboardButton("🔧 否，調整止損", callback_data=f"alert_adjust:{pid}"),
+                    ]])
+                    msg = await ctx.bot.send_message(uid,
+                        f"🚨 *{sym}* 觸及止損！\n\n"
+                        f"SL `{sl:.4f}` 已觸及\n現價 `{cur:.4f}`\n"
+                        f"損益 `{pnl:+.2f}%` 🔴{lev_note}\n\n"
+                        f"是否關閉倉位？",
+                        parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+                    PENDING_ALERTS[pid] = {
+                        "uid": uid, "sym": sym, "trigger": "SL",
+                        "cur": cur, "pnl": pnl, "entry": entry,
+                        "direction": direction, "sl": sl, "tp": tp,
+                        "leverage": p.get("leverage", 1), "market": p["market"],
+                        "alert_count": 1, "last_alert_time": _time.time(),
+                        "msg_id": msg.message_id,
+                    }
+                except Exception:
+                    pass
 
 
 # ============================================================
@@ -3150,6 +3202,164 @@ async def background_ml_labeler(ctx):
     if labeled:
         log.info(f"[ML] 已標籤 {labeled} 筆訓練資料")
 
+
+async def background_alert_reminder(ctx):
+    """每 5 分鐘檢查未回應的 TP/SL 警報，最多提醒 3 次後自動平倉"""
+    now = _time.time()
+    to_remove = []
+    for pid, info in list(PENDING_ALERTS.items()):
+        elapsed = now - info["last_alert_time"]
+        if elapsed < 300:  # 未到 5 分鐘
+            continue
+        uid   = info["uid"]
+        sym   = info["sym"]
+        count = info["alert_count"]
+        trigger = info["trigger"]
+        pnl   = info["pnl"]
+        cur   = info["cur"]
+        sl    = info["sl"]
+        tp    = info["tp"]
+
+        ordinals = {1: "第一次", 2: "第二次", 3: "第三次"}
+
+        if count < 3:
+            # 再次提醒
+            try:
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ 是，關閉倉位", callback_data=f"alert_close:{pid}"),
+                    InlineKeyboardButton("🔧 否，調整止損" if trigger == "SL" else "📈 否，繼續持有",
+                                         callback_data=f"alert_adjust:{pid}" if trigger == "SL" else f"alert_hold:{pid}"),
+                ]])
+                emoji = "🚨" if trigger == "SL" else "🎯"
+                await ctx.bot.send_message(uid,
+                    f"{emoji} *{sym}* {trigger} 警報（{ordinals.get(count+1, '')}）\n\n"
+                    f"現價附近 `{cur:.4f}`  損益 `{pnl:+.2f}%`\n"
+                    f"仍未處理，請盡快決定！",
+                    parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+                PENDING_ALERTS[pid]["alert_count"] += 1
+                PENDING_ALERTS[pid]["last_alert_time"] = now
+            except Exception as e:
+                log.warning(f"[Alert] 提醒失敗: {e}")
+        else:
+            # 已提醒 3 次 → 繼續等待，每 5 分鐘持續提醒直到使用者操作
+            try:
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ 是，關閉倉位", callback_data=f"alert_close:{pid}"),
+                    InlineKeyboardButton("🔧 否，調整止損" if trigger == "SL" else "📈 否，繼續持有",
+                                         callback_data=f"alert_adjust:{pid}" if trigger == "SL" else f"alert_hold:{pid}"),
+                ]])
+                emoji = "🚨" if trigger == "SL" else "🎯"
+                await ctx.bot.send_message(uid,
+                    f"{emoji} *{sym}* {trigger} 警報（持續提醒）\n\n"
+                    f"現價附近 `{cur:.4f}`  損益 `{pnl:+.2f}%`\n"
+                    f"⚠️ 請盡快處理，系統不會自動平倉",
+                    parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+                PENDING_ALERTS[pid]["last_alert_time"] = now
+            except Exception as e:
+                log.warning(f"[Alert] 持續提醒失敗: {e}")
+
+    for pid in to_remove:
+        PENDING_ALERTS.pop(pid, None)
+
+
+async def cb_alert_close(update, ctx):
+    """使用者確認關閉倉位"""
+    query = update.callback_query
+    await query.answer()
+    pid = int(query.data.split(":")[1])
+    uid = query.from_user.id
+    info = PENDING_ALERTS.pop(pid, None)
+    if not info:
+        await query.edit_message_text("⚠️ 此警報已處理或失效")
+        return
+    pos = _db.get_open_positions(uid)
+    p   = next((x for x in pos if x["id"] == pid), None)
+    if not p:
+        await query.edit_message_text("⚠️ 找不到倉位，可能已平倉")
+        return
+    cur = info["cur"]
+    _db.close_position(pid, cur, p["entry_price"], p["direction"])
+    pnl = (cur - p["entry_price"]) / p["entry_price"] * 100 * (1 if p["direction"] == "long" else -1)
+    await query.edit_message_text(
+        f"✅ *{info['sym']}* 倉位已關閉\n損益 `{pnl:+.2f}%`",
+        parse_mode=ParseMode.MARKDOWN)
+
+
+async def cb_alert_adjust(update, ctx):
+    """使用者選擇調整止損"""
+    query = update.callback_query
+    await query.answer()
+    pid  = int(query.data.split(":")[1])
+    uid  = query.from_user.id
+    info = PENDING_ALERTS.get(pid)
+    if not info:
+        await query.edit_message_text("⚠️ 此警報已處理或失效")
+        return
+    cur = info["cur"]
+    sym = info["sym"]
+    direction = info["direction"]
+    # 建議新止損：空留 2% 緩衝
+    if direction == "long":
+        suggest_sl = round(cur * 0.98, 4)
+    else:
+        suggest_sl = round(cur * 1.02, 4)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"✅ 確認新止損 {suggest_sl}", callback_data=f"alert_newsl:{pid}:{suggest_sl}"),
+        InlineKeyboardButton("✏️ 手動輸入", callback_data=f"alert_inputsl:{pid}"),
+    ]])
+    await query.edit_message_text(
+        f"🔧 *{sym}* 調整止損\n\n"
+        f"現價 `{cur:.4f}`\n"
+        f"建議新止損：`{suggest_sl}` (±2%)\n\n"
+        f"選擇確認或手動輸入新止損價格：",
+        parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+
+
+async def cb_alert_newsl(update, ctx):
+    """確認使用建議的新止損"""
+    query = update.callback_query
+    await query.answer()
+    parts   = query.data.split(":")
+    pid     = int(parts[1])
+    new_sl  = float(parts[2])
+    uid     = query.from_user.id
+    info    = PENDING_ALERTS.get(pid)
+    if not info:
+        await query.edit_message_text("⚠️ 此警報已處理或失效")
+        return
+    with _db._conn() as c:
+        c.execute("UPDATE positions SET sl_price=? WHERE id=?", (new_sl, pid))
+    PENDING_ALERTS.pop(pid, None)
+    await query.edit_message_text(
+        f"✅ *{info['sym']}* 止損已更新\n新 SL：`{new_sl}`",
+        parse_mode=ParseMode.MARKDOWN)
+
+
+async def cb_alert_inputsl(update, ctx):
+    """使用者選擇手動輸入止損"""
+    query = update.callback_query
+    await query.answer()
+    pid = int(query.data.split(":")[1])
+    uid = query.from_user.id
+    _PENDING_SL_INPUT[uid] = pid
+    await query.edit_message_text(
+        f"✏️ 請直接輸入新的止損價格（數字即可）：")
+
+
+async def cb_alert_hold(update, ctx):
+    """使用者選擇繼續持有（TP 觸發後）"""
+    query = update.callback_query
+    await query.answer()
+    pid  = int(query.data.split(":")[1])
+    info = PENDING_ALERTS.pop(pid, None)
+    if not info:
+        await query.edit_message_text("⚠️ 此警報已處理或失效")
+        return
+    await query.edit_message_text(
+        f"📈 *{info['sym']}* 繼續持有\n止盈警報已解除，背景持續監控中",
+        parse_mode=ParseMode.MARKDOWN)
+
+
 async def cmd_ml_status(update, ctx):
     """顯示 ML 訓練資料收集進度"""
     stats = _db.get_ml_stats()
@@ -3290,6 +3500,11 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_close_pick,    pattern=r"^close_pick:"))
     app.add_handler(CallbackQueryHandler(cb_atr_select,    pattern=r"^atr:"))
     app.add_handler(CallbackQueryHandler(cb_market_select, pattern=r"^mktsel:"))
+    app.add_handler(CallbackQueryHandler(cb_alert_close,   pattern=r"^alert_close:"))
+    app.add_handler(CallbackQueryHandler(cb_alert_adjust,  pattern=r"^alert_adjust:"))
+    app.add_handler(CallbackQueryHandler(cb_alert_newsl,   pattern=r"^alert_newsl:"))
+    app.add_handler(CallbackQueryHandler(cb_alert_inputsl, pattern=r"^alert_inputsl:"))
+    app.add_handler(CallbackQueryHandler(cb_alert_hold,    pattern=r"^alert_hold:"))
     app.add_error_handler(error_handler)
 
     # 加密版排程
@@ -3308,6 +3523,7 @@ def main():
     # Phase 2: 倉位監控（每 30 分鐘）
     app.job_queue.run_repeating(background_position_monitor,  interval=1800, first=360)
     app.job_queue.run_repeating(background_ml_labeler,        interval=86400, first=3600)  # 每天標籤一次
+    app.job_queue.run_repeating(background_alert_reminder,    interval=300,   first=60)   # 每5分鐘提醒未處理警報
 
     log.info("🤖 妖幣 Bot V2.3 啟動（加密 + TradingView + 台股 + 美股）")
     app.run_polling()
